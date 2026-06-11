@@ -62,8 +62,15 @@ services:
       -config scanner.attackOnStart=false
       -config database.recoverylog=false
       -config database.compactOnExit=true
-    # Cap memory so ZAP's JVM (container-aware) doesn't balloon on a shared host.
-    mem_limit: 2g
+      -config scanner.threadPerHost=2
+      -config spider.thread=2
+    environment:
+      # Hard-bound ALL JVM memory pools so an active scan's RSS (heap + direct buffers +
+      # metaspace + threads) stays well under the cgroup limit. Active scanning spikes
+      # memory; without these caps it OOM-killed the container.
+      JAVA_TOOL_OPTIONS: "-Xmx1024m -XX:MaxDirectMemorySize=256m -XX:MaxMetaspaceSize=256m -XX:+UseContainerSupport"
+    mem_limit: 3g
+    memswap_limit: 3g
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8090/JSON/core/view/version/ || exit 1"]
       interval: 20s
