@@ -1,0 +1,559 @@
+# 🛡️ ThreatProbe Scanner — Air-Gapped Penetration Testing Platform
+
+A self-contained, **Docker-Compose based** vulnerability assessment and penetration
+testing platform built to run **fully offline / air-gapped**. It provides a web GUI,
+a local CVE database, network/server vulnerability scanning, URL/web-application
+penetration testing, persistent storage of every scan, and **CSV/PDF report export**
+with vulnerability, severity, CVSS, and remediation details.
+
+---
+
+## Table of contents
+
+1. [Key capabilities](#key-capabilities)
+2. [Architecture](#architecture)
+3. [Technology stack](#technology-stack)
+4. [Project layout](#project-layout)
+5. [Prerequisites](#prerequisites)
+6. [Quick start](#quick-start)
+7. [Default credentials & ports](#default-credentials--ports)
+8. [Using the platform](#using-the-platform)
+9. [Scan types](#scan-types)
+10. [Web / URL penetration test checks](#web--url-penetration-test-checks)
+11. [Server vulnerability assessment & CVE correlation](#server-vulnerability-assessment--cve-correlation)
+12. [The local CVE database (offline import)](#the-local-cve-database-offline-import)
+13. [Reports (CSV / PDF)](#reports-csv--pdf)
+14. [Roles & permissions](#roles--permissions)
+15. [Data model](#data-model)
+16. [REST API reference](#rest-api-reference)
+17. [Configuration (environment variables)](#configuration-environment-variables)
+18. [Air-gapped deployment](#air-gapped-deployment)
+19. [Backup & restore](#backup--restore)
+20. [Troubleshooting](#troubleshooting)
+21. [Authorization & scope](#authorization--scope)
+
+---
+
+## Key capabilities
+
+- **Web GUI** — a dependency-free single-page application (plain HTML/CSS/JS, **no CDN,
+  no npm build step**) served by nginx. Works in a browser with zero internet access.
+- **Local CVE database** — stored in PostgreSQL, populated from **NVD JSON feeds**
+  imported offline. Ships pre-seeded with well-known sample CVEs so it is useful
+  immediately.
+- **Network / server vulnerability assessment** — `nmap` host discovery, port
+  scanning, and service/version detection, with **automatic correlation** of
+  discovered services against the local CVE database.
+- **URL / web-application penetration testing** — non-destructive checks for security
+  headers, TLS/certificate issues, software fingerprinting (+ CVE lookup), cookie
+  flags, dangerous HTTP methods, sensitive-path exposure, and reflected-input
+  indicators.
+- **Persistent storage** — every target, scan, discovered host, open service, and
+  finding is stored and browsable.
+- **Reporting** — export any scan as **CSV** or a styled **PDF** report containing the
+  vulnerability, severity, CVSS score/vector, description, **remediation**, and
+  references.
+- **Authentication & roles** — JWT login with `admin`, `operator`, and `viewer` roles.
+
+---
+
+## Architecture
+
+```
+                       ┌───────────────────────┐
+        Browser  ─────▶│  frontend (nginx)     │  :8080
+                       │  static GUI + /api ───┐│
+                       └───────────────────────┘│
+                                                ▼
+                       ┌───────────────────────┐
+                       │  backend (FastAPI)    │  :8000  REST API, auth, reports
+                       └───────────┬───────────┘
+                                   │ shared PostgreSQL
+                       ┌───────────▼───────────┐
+                       │  db (PostgreSQL 16)   │  :5432  CVEs, scans, findings
+                       └───────────▲───────────┘
+                                   │ polls for queued scans
+                       ┌───────────┴───────────┐
+                       │  worker (nmap + web)  │  executes scans
+                       └───────────────────────┘
+```
+
+| Service    | Image                | Role                                                    |
+|------------|----------------------|---------------------------------------------------------|
+| `db`       | `postgres:16-alpine` | Stores CVEs, targets, scans, hosts, services, findings  |
+| `backend`  | `python:3.12-slim`   | FastAPI REST API: auth, targets, scans, CVE, reports    |
+| `worker`   | `python:3.12` + nmap | Polls the DB and runs scans (nmap / built-in web / ZAP / SSH) |
+| `zap`      | `zaproxy/zaproxy`    | OWASP ZAP daemon — web-application scanning engine (REST API) |
+| `frontend` | `nginx:1.27-alpine`  | Serves the GUI and reverse-proxies `/api` to backend    |
+
+**Why no Redis/Celery?** A database-backed job queue (the worker polls for `queued`
+scans and claims them with `SELECT … FOR UPDATE SKIP LOCKED`) keeps the number of
+services — and therefore the air-gapped image set — to a minimum, while still allowing
+multiple workers to run safely.
+
+---
+
+## Technology stack
+
+- **Backend:** Python 3.12, FastAPI, SQLAlchemy 2, Pydantic v2, python-jose (JWT),
+  passlib/bcrypt.
+- **Scanning:** `nmap` (network/server), Python standard library (`urllib`, `ssl`)
+  for web checks — **no third-party scanning dependencies**, so it works offline.
+- **Reports:** `reportlab` (pure-Python PDF, no system libraries) and the stdlib `csv`.
+- **Database:** PostgreSQL 16.
+- **Frontend:** vanilla HTML/CSS/JavaScript (no framework, no build tooling).
+- **Orchestration:** Docker Compose.
+
+---
+
+## Project layout
+
+```
+pentest-platform/
+├── docker-compose.yml          # 4 services: db, backend, worker, frontend
+├── .env.example                # copy to .env and set secrets
+├── README.md
+├── data/
+│   └── cve_feeds/              # drop NVD JSON feeds here for offline import
+├── backend/
+│   ├── Dockerfile              # python:3.12-slim + nmap
+│   ├── requirements.txt
+│   └── app/
+│       ├── main.py             # FastAPI app, startup, DB wait, seeding
+│       ├── config.py           # env-driven settings
+│       ├── database.py         # SQLAlchemy engine/session
+│       ├── models.py           # ORM models (schema)
+│       ├── schemas.py          # Pydantic request/response models
+│       ├── auth.py             # password hashing, JWT, role guards
+│       ├── seed.py             # bootstrap admin + sample CVEs
+│       ├── worker.py           # background scan runner
+│       ├── routers/            # auth, targets, scans, cves, findings, reports, dashboard
+│       └── services/
+│           ├── scanner.py      # nmap wrapper + XML parser
+│           ├── cve_matcher.py  # service → CVE correlation
+│           ├── cve_import.py   # NVD 1.1 / 2.0 feed importer
+│           ├── web_scanner.py  # URL / web-app checks
+│           ├── report_csv.py   # CSV export
+│           └── report_pdf.py   # PDF export (reportlab)
+└── frontend/
+    ├── Dockerfile              # nginx + static assets
+    ├── nginx.conf              # serves GUI, proxies /api → backend
+    └── html/
+        ├── index.html
+        ├── css/styles.css
+        └── js/{api.js,app.js}
+```
+
+---
+
+## Prerequisites
+
+- Docker Engine 24+ and Docker Compose v2.
+- ~2 GB free disk for images + database volume.
+- For real network scans, the `worker` container needs network reachability to the
+  targets. The compose file grants `NET_RAW`/`NET_ADMIN` so faster `-sS` scans are
+  possible; the default profiles use TCP connect scans that work without them.
+
+---
+
+## Quick start
+
+```bash
+cp .env.example .env          # then edit secrets/passwords
+docker compose up -d --build
+```
+
+Wait ~15 seconds for the database to become healthy and the backend to seed, then open:
+
+> **http://localhost:8080**
+
+Log in with the admin credentials from your `.env`.
+
+To watch startup:
+
+```bash
+docker compose logs -f backend     # look for "[api] startup complete"
+docker compose logs -f worker      # "[worker] started; ... nmap=available"
+```
+
+---
+
+## Default credentials & ports
+
+| Item            | Default                                   | Where to change        |
+|-----------------|-------------------------------------------|------------------------|
+| Admin username  | `admin`                                   | `ADMIN_USERNAME` (.env)|
+| Admin password  | value of `ADMIN_PASSWORD` in `.env`       | `ADMIN_PASSWORD` (.env)|
+| GUI URL         | `http://localhost:8080`                   | `FRONTEND_PORT` (.env) |
+| API (internal)  | `backend:8000` (proxied via `/api`)       | —                      |
+| Database        | `db:5432` (not published to host)         | —                      |
+
+> ⚠️ The admin account is created **only on first startup** (when the users table is
+> empty). Change `SECRET_KEY`, `ADMIN_PASSWORD`, and `POSTGRES_PASSWORD` **before**
+> first launch in any real deployment. To reset, drop the `pgdata` volume (see
+> [Backup & restore](#backup--restore)).
+
+---
+
+## Using the platform
+
+1. **Add a target** — *Targets → + Add target*. Enter:
+   - an **IP**, **hostname**, or **CIDR range** (e.g. `10.0.0.5`, `10.0.0.0/24`) for
+     network/server scans, or
+   - a **URL** (e.g. `https://app.internal`) for web/URL penetration tests.
+2. **Launch a scan** — click **Scan** on a target and pick a [scan type](#scan-types).
+3. **Monitor** — the *Scans* page auto-refreshes every 4 seconds and shows
+   `queued → running → completed/failed` with a progress percentage.
+4. **Review** — open a scan to see discovered hosts and services, correlated **CVE
+   findings**, and **web findings**. Triage each CVE finding's status
+   (`open / confirmed / false_positive / fixed / accepted`).
+5. **Export** — download a **PDF** or **CSV** report from the scan detail page.
+6. **Browse CVEs** — the *CVE Database* page lets you search by ID, description, or
+   product and filter by severity. Admins can import NVD feeds here.
+7. **Manage users** (admin) — create operator/viewer/admin accounts under *Users*.
+
+---
+
+## Scan types
+
+| Type                                | nmap flags (default)      | Purpose |
+|-------------------------------------|---------------------------|---------|
+| **Server vulnerability assessment** (`full`) | `-sT -sV -T4 --open` | Open ports + service/version detection, then CVE correlation. Unauthenticated/remote. |
+| **Credentialed Linux assessment** (`credentialed`) | _SSH_ | Authenticated scan: logs in over SSH, enumerates **all installed packages + versions**, and reports each package's CVEs, criticality, and the **version to upgrade to**. Credentials are used in-memory only and never stored. |
+| **Host discovery** (`discovery`)    | `-sn`                     | Ping sweep — which hosts in a range are up. |
+| **Port scan** (`port`)              | `-sT -T4 --open`          | Open ports only (no version detection). |
+| **Web / URL penetration test** (`web`) | _n/a_                  | Built-in lightweight, non-destructive checks against the target URL (see below), incl. precise software→CVE correlation. |
+| **Web app scan — ZAP passive** (`zap_passive`) | _OWASP ZAP_ | Spider/crawl + passive analysis via OWASP ZAP. Non-destructive (no attack payloads). Many more findings than the built-in scanner. |
+| **Web app scan — ZAP active** (`zap_active`) | _OWASP ZAP_ | Spider then **active** attack (XSS, SQLi, injection, traversal…). **Intrusive — authorized targets only.** |
+| **Custom** (`custom`)               | operator-supplied         | Any nmap flags you provide, e.g. `-sT -sV -p 1-1000 --script vuln`. |
+
+### Web application scanning — built-in vs OWASP ZAP
+
+There are two web engines:
+
+- **Built-in** (`web`) — a fast, dependency-free, **non-destructive** passive checker
+  (security headers, TLS, cookies, methods, sensitive-path probe with SPA catch-all
+  guard, reflected-input canary, software→CVE). Surfaces misconfigurations, not
+  exploitable web-app vulns.
+- **OWASP ZAP** (`zap_passive` / `zap_active`) — the integrated industry-standard web
+  scanner, run as a headless daemon (`zap` service) and driven via its REST API. Passive
+  mode crawls + analyzes; **active** mode sends real attack payloads to find XSS/SQLi/
+  injection/traversal. ZAP alerts are de-duplicated per alert-type and stored as web
+  findings (severity, description, evidence, **solution/remediation**, references, CWE).
+
+> ZAP **active** scanning is intrusive (it attacks the target) — only run it against
+> systems you are explicitly authorized to actively test. ZAP also needs memory
+> (capped at 2 GB in compose) and writes session data; on a disk-constrained host keep
+> active scans scoped. The ZAP session is reset at the start of each scan to bound disk
+> use.
+
+### Credentialed Linux assessment (authenticated package VA)
+
+This is the most accurate "server VA". When launching a scan, choose **Credentialed
+Linux assessment** and supply an SSH username + password (or private key) and port.
+The platform:
+
+1. Connects over SSH (credentials held in memory only, **never written to the DB or logs**).
+2. Enumerates the **full installed-package inventory** (`dpkg` or `rpm`) and OS/kernel.
+3. Matches every package version against the local CVE database using precise,
+   version-range matching, and records each vulnerable package's CVEs, **criticality**,
+   and the **fixed version to upgrade to**.
+
+The full inventory (every package, vulnerable or not) is stored and downloadable as a
+dedicated **Package inventory CSV** from the scan detail page. Because credentialed
+scans run inside the backend (so credentials need never be persisted for a DB worker),
+they start immediately rather than queueing.
+
+### Matching accuracy & limitations
+
+Correlation is **version-aware**: a service/package is only reported when its detected
+version falls inside a CVE's affected version range (parsed from NVD CPE
+`versionStart*/versionEnd*`). There is **no** description-keyword guessing. A
+service/package with no detectable version produces no findings.
+
+This is a heuristic NVD/CPE matcher, not a distro security feed. Residual false
+positives are possible when an OS package shares an exact CPE product name with an
+unrelated product (e.g. the Debian `dash` shell vs. the Python "dash" library). For
+authoritative, distro-accurate results, pair this with vendor OVAL/security feeds.
+
+---
+
+## Web / URL penetration test checks
+
+All checks are **non-destructive** (no exploitation payloads). For each finding the
+platform records a severity, description, evidence, and remediation.
+
+- **Security headers** — flags missing `Strict-Transport-Security` (HSTS),
+  `Content-Security-Policy`, `X-Frame-Options`, `X-Content-Type-Options`,
+  `Referrer-Policy`, `Permissions-Policy`.
+- **TLS / certificate** — detects cleartext HTTP, deprecated protocols
+  (TLS 1.1/1.0/SSLv3), and expired / soon-to-expire certificates.
+- **Software fingerprinting** — reads `Server` / `X-Powered-By` banners, reports the
+  information disclosure, and **correlates the detected software against the local CVE
+  database**.
+- **Cookies** — flags session cookies missing `Secure`, `HttpOnly`, or `SameSite`.
+- **HTTP methods** — flags dangerous methods (`TRACE`, `TRACK`, `PUT`, `DELETE`,
+  `CONNECT`) advertised via `OPTIONS`.
+- **Sensitive path exposure** — probes for `/.git/HEAD`, `/.env`, `/.svn/entries`,
+  `/server-status`, `/phpinfo.php`, backup archives, `/.DS_Store`, etc.
+- **Reflected input** — appends a harmless alphanumeric canary and reports if it is
+  reflected unsanitized (a possible XSS sink to test manually). **No script/SQL
+  payloads are sent.**
+
+---
+
+## Server vulnerability assessment & CVE correlation
+
+After an nmap scan, every discovered service is matched against the local CVE
+database using an **explainable, conservative** strategy. Each finding stores *why*
+it matched, so reports are defensible:
+
+1. **CPE product + version match** — the strongest signal. When the service exposes a
+   CPE / product+version and a CVE lists an overlapping affected product, it is a
+   **high**-confidence match (version-aware). A product match where the version
+   differs is recorded as **medium** so it is still surfaced for triage.
+2. **Description keyword match** — if the product name appears in the CVE
+   description, it is flagged at **low** confidence for analyst review.
+
+Findings are sorted by severity then CVSS so the most serious surface first. CVE
+correlation also runs against software identified during web scans.
+
+---
+
+## The local CVE database (offline import)
+
+The platform ships with ~10 well-known sample CVEs (Log4Shell, Heartbleed,
+EternalBlue, Ghostcat, Shellshock, Spring4Shell, …) so correlation and reporting work
+out of the box. For full coverage, import NVD feeds offline:
+
+1. On an **internet-connected** machine, download NVD JSON feeds, e.g.
+   `https://nvd.nist.gov/feeds/json/cve/1.1/nvdcve-1.1-2024.json.gz`
+   (one file per year; `.json` or `.json.gz`).
+2. Transfer the files into `./data/cve_feeds/` on the air-gapped host (mounted into
+   both `backend` and `worker` at `/data/cve_feeds`).
+3. In the GUI, go to **CVE Database → Import NVD feeds** (admin only), or call
+   `POST /api/cves/import`.
+
+**Supported formats:** NVD **1.1** legacy feeds (`CVE_Items`), NVD **2.0** API exports
+(`vulnerabilities`), and gzip-compressed variants. Re-importing **updates** existing
+records. Imports are batched for bounded memory on large feeds.
+
+For each CVE the importer stores: ID, description, CVSS v3/v2 score and vector,
+derived severity, affected product CPEs, **structured affected version ranges**
+(`versionStart*/versionEnd*`, used for precise matching), references, CWE, and
+heuristic **remediation** guidance.
+
+> **This deployment** currently has NVD years **2016–2026 loaded (~274,800 CVEs)**.
+> The range was bounded by available disk on the shared host (another workload
+> occupies most of `/opt`). To add more years, place additional `CVE-YYYY.json.xz`
+> feeds in `data/cve_feeds/` and re-import — imports are incremental and idempotent.
+> Supported feed extensions: `.json`, `.json.gz`, `.json.xz`.
+
+---
+
+## Reports (CSV / PDF)
+
+From any scan detail page:
+
+- **CSV** — one row per finding (both CVE and web findings), with columns: type, asset,
+  hostname, port/protocol, service/category, product, version, CVE/finding, severity,
+  CVSS, confidence, match/evidence, status, description, remediation, references, CWE.
+- **PDF** — a styled assessment report containing:
+  - a **title page** with scan metadata,
+  - an **executive summary** with a severity breakdown,
+  - a **host & service inventory**,
+  - **detailed CVE findings** (affected asset, status, match rationale, CWE,
+    description, remediation, references), and
+  - **web/URL findings** (category, severity, evidence, remediation).
+
+Endpoints: `GET /api/reports/scan/{id}/csv` and `GET /api/reports/scan/{id}/pdf`.
+
+### Filtered / consolidated reports
+
+The **Reports** page builds a single report **across scans** (optionally scoped to one
+target) with a composable filter set — pick any combination of:
+
+- **Severity** (Critical/High/Medium/Low/Info)
+- **Triage status** (open/confirmed/false_positive/fixed/accepted)
+- **Finding type** (Server/CVE, Web/URL, Package inventory)
+- free-text **host/IP**, **port**, **CVE id**, **package name**
+- **match confidence** and **vulnerable-packages-only**
+
+A live **Preview count** shows how many findings match before you export. Download the
+filtered result as **PDF** or **CSV**. Backend endpoints:
+`GET /api/reports/export.csv`, `GET /api/reports/export.pdf`,
+`GET /api/reports/export/preview` (all accept the filter query params
+`target_id, severity, status, types, host, port, cve_id, package, confidence,
+vulnerable_only`). The PDF caps detailed entries per section (use CSV for the full set).
+
+---
+
+## Roles & permissions
+
+| Role       | Targets | Scans            | Findings        | CVE import | Users |
+|------------|---------|------------------|-----------------|------------|-------|
+| `admin`    | ✔       | ✔                | ✔               | ✔          | ✔     |
+| `operator` | ✔       | ✔ create/delete  | ✔ triage        | view       | —     |
+| `viewer`   | read    | read             | read            | read       | —     |
+
+JWT tokens expire after `ACCESS_TOKEN_EXPIRE_MINUTES` (default 480 = 8 hours).
+
+---
+
+## Data model
+
+```
+User(id, username, hashed_password, role, is_active, created_at)
+Target(id, name, address, description, tags, created_at)
+Scan(id, target_id→Target, scan_type, profile, status, progress, error,
+     raw_output, created_by, created_at, started_at, finished_at)
+Host(id, scan_id→Scan, address, hostname, state, os_guess)
+Service(id, host_id→Host, port, protocol, state, service_name, product,
+        version, cpe, banner)
+CVE(id, cve_id, description, cvss_v3_score, cvss_v3_vector, cvss_v2_score,
+    severity, published, last_modified, cpe_products, references, remediation, cwe)
+Finding(id, scan_id→Scan, service_id→Service, cve_id, severity, cvss_score,
+        match_confidence, match_reason, status, notes, created_at)   # network/server CVE findings
+WebFinding(id, scan_id→Scan, target_url, category, name, severity, cvss_score,
+           cve_id, description, evidence, remediation, references, status, created_at)
+```
+
+Deleting a target cascades to its scans; deleting a scan cascades to its hosts,
+services, and findings. Tables are created automatically on startup.
+
+---
+
+## REST API reference
+
+Base path: `/api` (through the nginx proxy) or directly on the backend at
+`http://<backend>:8000`. Interactive Swagger UI: `http://<backend>:8000/docs`.
+All endpoints except `POST /api/auth/login` and `GET /api/health` require a
+`Authorization: Bearer <token>` header.
+
+**Auth**
+- `POST /api/auth/login` — form fields `username`, `password` → `{access_token, role}`
+- `GET  /api/auth/me` — current user
+- `GET  /api/auth/users` *(admin)* · `POST /api/auth/users` *(admin)* · `DELETE /api/auth/users/{id}` *(admin)*
+
+**Targets**
+- `GET /api/targets` · `POST /api/targets` · `GET /api/targets/{id}` · `PUT /api/targets/{id}` · `DELETE /api/targets/{id}`
+
+**Scans**
+- `GET  /api/scans` *(optional `?target_id=`)*
+- `POST /api/scans` — `{target_id, scan_type, custom_flags?}`
+- `GET  /api/scans/{id}` — scan + hosts + services
+- `GET  /api/scans/{id}/findings` *(optional `?severity=`)*
+- `GET  /api/scans/{id}/web-findings`
+- `DELETE /api/scans/{id}`
+
+**Findings (triage)**
+- `PATCH /api/findings/{id}` — `{status?, notes?}`
+- `PATCH /api/findings/web/{id}` — `{status?}`
+
+**CVEs**
+- `GET  /api/cves` *(`?q=&severity=&limit=&offset=`)*
+- `GET  /api/cves/count` — totals by severity
+- `GET  /api/cves/{cve_id}`
+- `POST /api/cves/import` *(admin)* — import feeds from `/data/cve_feeds`
+
+**Reports**
+- `GET /api/reports/scan/{id}/csv`
+- `GET /api/reports/scan/{id}/pdf`
+
+**Dashboard**
+- `GET /api/dashboard/stats`
+
+**Health**
+- `GET /api/health`
+
+---
+
+## Configuration (environment variables)
+
+Set in `.env` (consumed by `docker-compose.yml`) or directly in the environment.
+
+| Variable                      | Default                                | Description                              |
+|-------------------------------|----------------------------------------|------------------------------------------|
+| `POSTGRES_USER`               | `pentest`                              | DB user                                  |
+| `POSTGRES_PASSWORD`           | `pentest`                              | DB password                              |
+| `POSTGRES_DB`                 | `pentest`                              | DB name                                  |
+| `DATABASE_URL`                | derived                                | SQLAlchemy URL (set by compose)          |
+| `SECRET_KEY`                  | placeholder                            | JWT signing key — **change this**        |
+| `ADMIN_USERNAME`              | `admin`                                | Bootstrap admin username                 |
+| `ADMIN_PASSWORD`              | from `.env.example`                    | Bootstrap admin password — **change**    |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | `480`                                  | JWT lifetime                             |
+| `CVE_FEED_DIR`                | `/data/cve_feeds`                      | Where the importer reads NVD feeds       |
+| `NMAP_DEFAULT_FLAGS`          | `-sT -sV -T4 --open`                   | Flags for the `full` profile             |
+| `SCAN_TIMEOUT_SECONDS`        | `3600`                                 | Hard cap per scan                        |
+| `WORKER_POLL_INTERVAL`        | `5`                                    | Worker poll interval (seconds)           |
+| `FRONTEND_PORT`               | `8080`                                 | Host port for the GUI                    |
+| `CORS_ORIGINS`                | `*`                                    | Allowed CORS origins                     |
+
+---
+
+## Air-gapped deployment
+
+Build the images where you have internet access, then move them:
+
+```bash
+# On a connected build machine:
+docker compose build
+docker save \
+  pentest-platform-backend \
+  pentest-platform-frontend \
+  postgres:16-alpine \
+  > pentest-images.tar
+
+# Transfer pentest-images.tar AND the project directory (for compose + ./data) to the
+# air-gapped host, then:
+docker load -i pentest-images.tar
+docker compose up -d        # uses the loaded images; no pulls needed
+```
+
+(`backend` and `worker` share the same image, so two `save` entries cover all four
+services.) Bring NVD feeds across on the same media and import them via the GUI.
+
+---
+
+## Backup & restore
+
+The database lives in the named volume `pentest-platform_pgdata`.
+
+```bash
+# Backup
+docker compose exec db pg_dump -U pentest pentest > backup.sql
+
+# Restore (into a fresh stack)
+cat backup.sql | docker compose exec -T db psql -U pentest pentest
+
+# Full reset (DESTROYS all data, re-seeds admin + sample CVEs on next start)
+docker compose down -v
+```
+
+---
+
+## Troubleshooting
+
+- **Backend exits with `password cannot be longer than 72 bytes`** — a known
+  `passlib`/`bcrypt` version conflict. `requirements.txt` pins `bcrypt==4.0.1` to
+  resolve it; rebuild with `docker compose build backend worker`.
+- **Worker logs `nmap=MISSING`** — the worker image didn't install nmap; rebuild the
+  worker (`docker compose build worker`).
+- **Scans stay `queued`** — the worker isn't running or can't reach the DB. Check
+  `docker compose logs worker`.
+- **Scan `failed` with "nmap failed" / host down** — the worker container can't reach
+  the target. Verify network path and that you used an IP/host the worker can route to.
+- **Web scan shows "Target unreachable"** — the URL is wrong or not reachable from the
+  worker container; confirm scheme (`http://`/`https://`) and connectivity.
+- **`401 Unauthorized` in the GUI** — token expired; log in again.
+- **Backend can't connect to DB at startup** — it retries for ~60s waiting for the
+  `db` healthcheck; check `docker compose logs db`.
+
+---
+
+## Authorization & scope
+
+This tool is for **authorized** security testing only. Scan and test **only** systems
+you own or have **explicit written permission** to assess. The web checks are
+non-destructive (no exploitation or injection payloads are sent), but you remain fully
+responsible for operating within your rules of engagement and applicable law.
