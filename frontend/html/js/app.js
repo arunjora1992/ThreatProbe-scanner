@@ -328,7 +328,7 @@
       const FIND_CAP = 300;
       const findRows = findings.slice(0, FIND_CAP).map((f) => `
         <tr>
-          <td><a onclick="ptViewCve('${esc(f.cve_id)}')">${esc(f.cve_id)}</a></td>
+          <td class="nowrap"><a onclick="ptViewCve('${esc(f.cve_id)}')">${esc(f.cve_id)}</a></td>
           <td>${sevBadge(f.severity)}</td>
           <td>${f.cvss_score ?? "—"}</td>
           <td>${esc(f.match_confidence)}<br><span class="muted small">${esc(f.match_reason)}</span></td>
@@ -584,7 +584,7 @@
       const cves = await API.get("/api/cves?" + params.toString());
       const rows = cves.map((c) => `
         <tr onclick="ptViewCve('${esc(c.cve_id)}')" style="cursor:pointer">
-          <td class="mono">${esc(c.cve_id)}</td>
+          <td class="mono nowrap">${esc(c.cve_id)}</td>
           <td>${sevBadge(c.severity)}</td>
           <td>${c.cvss_v3_score ?? "—"}</td>
           <td>${esc((c.description || "").slice(0, 130))}…</td></tr>`).join("") ||
