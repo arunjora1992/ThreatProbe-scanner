@@ -67,9 +67,28 @@ def wait_for_zap(retries: int = 30, delay: float = 3.0) -> bool:
     return False
 
 
+def _set_scope_limits():
+    """Bound the crawl and active scan so memory stays finite on real/large sites."""
+    calls = [
+        ("/JSON/spider/action/setOptionMaxDepth/", {"Integer": settings.zap_spider_max_depth}),
+        ("/JSON/spider/action/setOptionMaxDuration/", {"Integer": settings.zap_spider_max_minutes}),
+        ("/JSON/spider/action/setOptionThreadCount/", {"Integer": 2}),
+        ("/JSON/ascan/action/setOptionMaxScanDurationInMins/", {"Integer": settings.zap_active_max_minutes}),
+        ("/JSON/ascan/action/setOptionThreadPerHost/", {"Integer": 2}),
+        ("/JSON/ascan/action/setOptionHostPerScan/", {"Integer": 1}),
+        ("/JSON/ascan/action/setOptionMaxResultsToList/", {"Integer": 200}),
+    ]
+    for path, params in calls:
+        try:
+            _api(path, params, timeout=15)
+        except Exception:
+            pass  # option names vary slightly by ZAP version; best-effort
+
+
 def _spider(url: str, deadline: float) -> int:
     scan_id = _api("/JSON/spider/action/scan/",
-                   {"url": url, "recurse": "true", "maxChildren": "0"}).get("scan")
+                   {"url": url, "recurse": "true",
+                    "maxChildren": str(settings.zap_spider_max_children)}).get("scan")
     while time.time() < deadline:
         status = _api("/JSON/spider/view/status/", {"scanId": scan_id}).get("status", "0")
         if status == "100":
@@ -163,6 +182,9 @@ def run_zap_scan(target_url: str, active: bool = False, log_cb=None) -> ZapResul
         _api("/JSON/core/action/newSession/", {"name": "scan", "overwrite": "true"}, timeout=60)
     except Exception:
         pass
+    _set_scope_limits()
+    _log(f"Scope bounded: spider depth≤{settings.zap_spider_max_depth}, "
+         f"≤{settings.zap_spider_max_children} children/node, active ≤{settings.zap_active_max_minutes} min")
     # Seed ZAP with the target so it's in scope / accessed at least once.
     try:
         _api("/JSON/core/action/accessUrl/", {"url": url, "followRedirects": "true"}, timeout=60)

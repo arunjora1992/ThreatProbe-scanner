@@ -38,7 +38,10 @@ class Settings(BaseSettings):
     zap_api_url: str = "http://zap:8090"
     zap_api_key: str = ""  # empty == API key disabled (internal/air-gapped use)
     zap_spider_max_minutes: int = 5
-    zap_active_max_minutes: int = 20
+    zap_active_max_minutes: int = 15
+    # Scope bounds — keep the crawl/scan finite so memory stays bounded on real sites.
+    zap_spider_max_depth: int = 5
+    zap_spider_max_children: int = 12
 
 
 settings = Settings()
