@@ -1,0 +1,83 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: pentest_db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-pentest}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pentest}
+      POSTGRES_DB: ${POSTGRES_DB:-pentest}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pentest}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  backend:
+    build: ./backend
+    container_name: pentest_backend
+    environment:
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-pentest}:${POSTGRES_PASSWORD:-pentest}@db:5432/${POSTGRES_DB:-pentest}
+      SECRET_KEY: ${SECRET_KEY:-change-me-in-production-please-use-a-long-random-string}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
+      CVE_FEED_DIR: /data/cve_feeds
+    volumes:
+      - ./data:/data
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    build: ./backend
+    container_name: pentest_worker
+    command: ["python", "-m", "app.worker"]
+    environment:
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-pentest}:${POSTGRES_PASSWORD:-pentest}@db:5432/${POSTGRES_DB:-pentest}
+      CVE_FEED_DIR: /data/cve_feeds
+      ZAP_API_URL: http://zap:8090
+    volumes:
+      - ./data:/data
+    # nmap SYN scans need NET_RAW/NET_ADMIN. The default profiles use TCP connect
+    # (-sT) which works without these, but granting them enables faster -sS scans.
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # OWASP ZAP daemon — web-application scanning engine (driven via REST API by the worker).
+  zap:
+    image: ghcr.io/zaproxy/zaproxy:stable
+    container_name: pentest_zap
+    command: >
+      zap.sh -daemon -host 0.0.0.0 -port 8090
+      -config api.disablekey=true
+      -config api.addrs.addr.name=.* -config api.addrs.addr.regex=true
+      -config scanner.attackOnStart=false
+    # Cap memory so ZAP's JVM (container-aware) doesn't balloon on a shared host.
+    mem_limit: 2g
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8090/JSON/core/view/version/ || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 90s
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    container_name: pentest_frontend
+    ports:
+      - "${FRONTEND_PORT:-8080}:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  pgdata:
