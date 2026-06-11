@@ -37,6 +37,35 @@ class User(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class SmtpConfig(Base):
+    """SMTP settings for emailing reports — configured in the GUI (single row, id=1)."""
+    __tablename__ = "smtp_config"
+    id = Column(Integer, primary_key=True)
+    host = Column(String(255), default="")
+    port = Column(Integer, default=587)
+    username = Column(String(255), default="")
+    password = Column(String(512), default="")
+    from_addr = Column(String(255), default="")
+    use_tls = Column(Boolean, default=True)
+    use_ssl = Column(Boolean, default=False)
+    default_recipients = Column(Text, default="")  # comma-separated
+    enabled = Column(Boolean, default=False)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+
+class CveUpdateConfig(Base):
+    """Periodic CVE auto-update settings (single row, id=1), managed from the GUI."""
+    __tablename__ = "cve_update_config"
+    id = Column(Integer, primary_key=True)
+    enabled = Column(Boolean, default=False)
+    interval_hours = Column(Integer, default=24)
+    source = Column(String(16), default="online")  # online | feed_dir
+    last_run = Column(DateTime, nullable=True)
+    last_status = Column(String(16), default="never")  # ok | error | running | never
+    last_message = Column(Text, default="")
+    last_added = Column(Integer, default=0)
+
+
 class Target(Base):
     __tablename__ = "targets"
     id = Column(Integer, primary_key=True)
@@ -59,6 +88,7 @@ class Scan(Base):
     progress = Column(Integer, default=0)
     error = Column(Text, default="")
     raw_output = Column(Text, default="")  # raw nmap XML/stdout for audit
+    log = Column(Text, default="")  # live, shell-like progress log appended during the scan
     created_by = Column(String(64), default="")
     created_at = Column(DateTime, default=datetime.utcnow)
     started_at = Column(DateTime, nullable=True)

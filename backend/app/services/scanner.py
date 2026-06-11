@@ -5,9 +5,10 @@ the scan is marked failed with a clear error instead of crashing the worker.
 """
 import shutil
 import subprocess
+import threading
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 from ..config import settings
 
@@ -57,11 +58,23 @@ def build_flags(scan_type: str, custom_flags: Optional[str]) -> str:
     return SCAN_PROFILES.get(scan_type, SCAN_PROFILES["full"])
 
 
-def run_scan(target_address: str, scan_type: str = "full",
-             custom_flags: Optional[str] = None) -> ScanResult:
-    """Run nmap against target_address and return parsed results.
+def expand_targets(address: str) -> List[str]:
+    """Split a target's address field into individual nmap targets.
 
-    Raises RuntimeError on environment/execution problems with a readable message.
+    Supports multiple IPs/hostnames/CIDRs separated by commas, whitespace, or newlines,
+    e.g. "10.0.0.1, 10.0.0.2  10.0.0.0/24".
+    """
+    parts = address.replace(",", " ").replace("\n", " ").split()
+    return [p.strip() for p in parts if p.strip()]
+
+
+def run_scan(target_address: str, scan_type: str = "full",
+             custom_flags: Optional[str] = None,
+             log_cb: Optional[Callable[[str], None]] = None) -> ScanResult:
+    """Run nmap against one or more targets and return parsed results.
+
+    If log_cb is given, nmap's live progress (stderr, via --stats-every) is streamed
+    to it for the GUI terminal view. Raises RuntimeError on failure.
     """
     if not nmap_available():
         raise RuntimeError(
@@ -69,25 +82,43 @@ def run_scan(target_address: str, scan_type: str = "full",
         )
 
     flags = build_flags(scan_type, custom_flags)
-    # Always request XML on stdout for reliable parsing.
-    cmd = ["nmap", *flags.split(), "-oX", "-", target_address]
+    targets = expand_targets(target_address) or [target_address]
+    # Always request XML on stdout for reliable parsing; --stats-every gives live progress.
+    cmd = ["nmap", *flags.split(), "--stats-every", "3s", "-oX", "-", *targets]
+    if log_cb:
+        log_cb(f"$ {' '.join(cmd)}")
+
     try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=settings.scan_timeout_seconds,
-        )
-    except subprocess.TimeoutExpired:
-        raise RuntimeError(f"Scan timed out after {settings.scan_timeout_seconds}s")
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     except FileNotFoundError:
         raise RuntimeError("nmap binary not found")
 
-    if proc.returncode != 0 and not proc.stdout.strip():
-        raise RuntimeError(f"nmap failed: {proc.stderr.strip() or 'unknown error'}")
+    # Stream stderr (progress) live to the callback while stdout (XML) is collected.
+    def _pump_stderr():
+        try:
+            for line in proc.stderr:
+                line = line.rstrip()
+                if line and log_cb:
+                    log_cb(line)
+        except Exception:
+            pass
 
-    hosts = parse_nmap_xml(proc.stdout)
-    return ScanResult(hosts=hosts, raw_xml=proc.stdout, flags=flags)
+    t = threading.Thread(target=_pump_stderr, daemon=True)
+    t.start()
+    try:
+        stdout, _ = proc.communicate(timeout=settings.scan_timeout_seconds)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        raise RuntimeError(f"Scan timed out after {settings.scan_timeout_seconds}s")
+    t.join(timeout=2)
+
+    if proc.returncode != 0 and not (stdout or "").strip():
+        raise RuntimeError("nmap failed (no output)")
+
+    hosts = parse_nmap_xml(stdout or "")
+    if log_cb:
+        log_cb(f"nmap finished: {len(hosts)} host(s) up")
+    return ScanResult(hosts=hosts, raw_xml=stdout or "", flags=flags)
 
 
 def parse_nmap_xml(xml_text: str) -> List[ParsedHost]:

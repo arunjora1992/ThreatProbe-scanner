@@ -8,7 +8,7 @@ from sqlalchemy.exc import OperationalError
 
 from .config import settings
 from .database import Base, engine
-from .routers import auth, cves, dashboard, findings, reports, scans, targets
+from .routers import auth, cves, dashboard, findings, reports, scans, settings as settings_router, targets
 from .seed import run_seed
 
 app = FastAPI(
@@ -56,12 +56,29 @@ def _ensure_indexes():
         print(f"[api] index setup skipped: {exc}", flush=True)
 
 
+def _ensure_columns():
+    """Add columns introduced after the initial schema (create_all won't alter
+    existing tables). Safe to run repeatedly."""
+    stmts = [
+        "ALTER TABLE scans ADD COLUMN IF NOT EXISTS log TEXT DEFAULT ''",
+    ]
+    try:
+        with engine.begin() as conn:
+            for s in stmts:
+                conn.execute(text(s))
+    except Exception as exc:  # noqa: BLE001
+        print(f"[api] column migration skipped: {exc}", flush=True)
+
+
 @app.on_event("startup")
 def startup():
     _wait_for_db()
     Base.metadata.create_all(bind=engine)
+    _ensure_columns()
     _ensure_indexes()
     run_seed()
+    from .services import cve_updater
+    cve_updater.start_scheduler()
     print("[api] startup complete", flush=True)
 
 
@@ -77,3 +94,4 @@ app.include_router(cves.router)
 app.include_router(findings.router)
 app.include_router(reports.router)
 app.include_router(dashboard.router)
+app.include_router(settings_router.router)

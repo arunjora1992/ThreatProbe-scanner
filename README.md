@@ -54,6 +54,11 @@ with vulnerability, severity, CVSS, and remediation details.
   vulnerability, severity, CVSS score/vector, description, **remediation**, and
   references.
 - **Authentication & roles** — JWT login with `admin`, `operator`, and `viewer` roles.
+- **Multi-host targets** — a single target may list several IPs/hostnames/CIDRs (space, comma, or newline separated); all are scanned together.
+- **Live scan log** — a shell-like, auto-scrolling terminal view per scan, streaming progress in real time (nmap output, ZAP spider/active stages, per-host SSH package correlation).
+- **Email reports** — SMTP is configured **in the GUI** (stored in the DB, not in files); email any scan's report with the severity summary in the body and PDF/CSV attached.
+- **Scheduled CVE updates** — opt-in auto-refresh of the CVE database every N hours (default 24), online from the NVD mirror or by re-importing the offline feed directory; controlled from the CVE Database page.
+- **Dark / light theme** toggle (persisted per browser).
 
 ---
 
@@ -344,10 +349,30 @@ derived severity, affected product CPEs, **structured affected version ranges**
 heuristic **remediation** guidance.
 
 > **This deployment** currently has NVD years **2016–2026 loaded (~274,800 CVEs)**.
-> The range was bounded by available disk on the shared host (another workload
-> occupies most of `/opt`). To add more years, place additional `CVE-YYYY.json.xz`
-> feeds in `data/cve_feeds/` and re-import — imports are incremental and idempotent.
-> Supported feed extensions: `.json`, `.json.gz`, `.json.xz`.
+> To add more years, place additional `CVE-YYYY.json.xz` feeds in `data/cve_feeds/`
+> and re-import — imports are incremental and idempotent. Supported feed extensions:
+> `.json`, `.json.gz`, `.json.xz`.
+
+### Scheduled / automatic CVE updates
+
+On the **CVE Database** page, admins can enable **automatic updates** on an interval
+(default every 24 hours). Two sources:
+
+- **Online** — downloads the current-year NVD feed from the fkie-cad mirror and upserts
+  it (new CVEs are added, modified ones refreshed). Requires outbound internet.
+- **Feed directory (offline)** — re-imports whatever feeds are present in
+  `data/cve_feeds/` (the air-gapped path; an operator drops new yearly feeds in).
+
+A background scheduler in the backend runs due updates; **Update now** triggers one
+immediately. Endpoints: `GET/PUT /api/cves/update/config`, `POST /api/cves/update/run`.
+
+### Email reports (GUI-configured SMTP)
+
+Configure SMTP under **Settings → Email/SMTP** (host, port, STARTTLS/SSL, credentials,
+default recipients) — stored in the database, not in `.env`. From any scan, **Email
+report** sends the findings summary (totals + severity breakdown) in the body with the
+PDF and/or CSV attached. Endpoints: `GET/PUT /api/settings/smtp`,
+`POST /api/settings/smtp/test`, `POST /api/reports/scan/{id}/email`.
 
 ---
 

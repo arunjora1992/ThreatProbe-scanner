@@ -1,6 +1,8 @@
 .env
 data/cve_feeds/*.json
 data/cve_feeds/*.json.gz
+data/cve_feeds/*.json.xz
+data/cve_feeds/_auto/
 __pycache__/
 *.pyc
 .DS_Store

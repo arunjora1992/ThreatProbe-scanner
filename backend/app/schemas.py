@@ -144,3 +144,34 @@ class CVEImportResult(BaseModel):
     updated: int
     files_processed: int
     message: str
+
+
+# ---- SMTP / email ----
+class SmtpConfigIn(BaseModel):
+    host: str = ""
+    port: int = 587
+    username: str = ""
+    password: Optional[str] = None  # None/"" => keep existing
+    from_addr: str = ""
+    use_tls: bool = True
+    use_ssl: bool = False
+    default_recipients: str = ""
+    enabled: bool = False
+
+
+class SmtpConfigOut(BaseModel):
+    host: str
+    port: int
+    username: str
+    from_addr: str
+    use_tls: bool
+    use_ssl: bool
+    default_recipients: str
+    enabled: bool
+    has_password: bool
+
+
+class EmailReportRequest(BaseModel):
+    recipients: Optional[str] = None  # comma-separated; falls back to default_recipients
+    formats: List[str] = ["pdf", "csv"]
+    test: bool = False

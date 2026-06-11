@@ -80,7 +80,8 @@
 
   // ---------- routing (path-based, reflected in the browser URL) ----------
   const ROUTES = { dashboard: renderDashboard, targets: renderTargets, scans: renderScans,
-                   cves: renderCves, reports: renderReports, users: renderUsers };
+                   cves: renderCves, reports: renderReports, settings: renderSettings,
+                   users: renderUsers };
 
   document.getElementById("nav").addEventListener("click", (e) => {
     const item = e.target.closest(".nav-item");
@@ -179,8 +180,9 @@
   function targetForm(t = {}) {
     return `
       <div class="form-row"><label>Name</label><input id="t-name" value="${esc(t.name || "")}" placeholder="e.g. Web server prod"></div>
-      <div class="form-row"><label>Address / URL / CIDR</label>
-        <input id="t-address" value="${esc(t.address || "")}" placeholder="10.0.0.5 · 10.0.0.0/24 · https://app.local">
+      <div class="form-row"><label>Address(es) / URL / CIDR</label>
+        <textarea id="t-address" rows="2" placeholder="One or more, separated by space, comma or newline — e.g. 10.0.0.5, 10.0.0.6  10.0.0.0/24  or  https://app.local">${esc(t.address || "")}</textarea>
+        <span class="muted small">Multiple IPs/hosts allowed in a single target (scanned together).</span>
       </div>
       <div class="form-row"><label>Tags (comma separated)</label><input id="t-tags" value="${esc(t.tags || "")}" placeholder="prod, dmz"></div>
       <div class="form-row"><label>Description</label><textarea id="t-desc" rows="2">${esc(t.description || "")}</textarea></div>
@@ -357,6 +359,7 @@
             <button class="btn btn-primary" onclick="ptDownload(${scan.id},'pdf')">⬇ PDF report</button>
             <button class="btn btn-primary" onclick="ptDownload(${scan.id},'csv')">⬇ CSV report</button>
             ${scan.scan_type === "credentialed" ? `<button class="btn" onclick="ptDownloadPkgs(${scan.id})">⬇ Package inventory CSV</button>` : ""}
+            <button class="btn" onclick="ptEmailScan(${scan.id})">✉ Email report</button>
           </div>
         </div>
         <div class="card">
@@ -369,6 +372,8 @@
             ${scan.error ? `<span class="k">Error</span><span style="color:#ff6b6b">${esc(scan.error)}</span>` : ""}
           </div>
         </div>
+        <h3 class="section-title">Live scan log <span id="log-live"></span></h3>
+        <pre id="scan-console" class="console"></pre>
         <h3 class="section-title">CVE findings (${findings.length})</h3>
         ${findings.length > FIND_CAP ? `<p class="muted small">Showing first ${FIND_CAP}. Use the Reports page or CSV export for the full set.</p>` : ""}
         <div class="table-wrap"><table class="fixed">
@@ -390,24 +395,65 @@
 
       if (scan.scan_type === "credentialed") ptLoadPackages(scan.id);
 
-      // While running, poll status ONLY and update it in place (no full re-render →
-      // no flicker). Do one final full render when the scan finishes.
-      if (scan.status === "queued" || scan.status === "running") {
+      // Load the live log (and keep streaming it while the scan runs).
+      logOffset = 0;
+      ptLoadLog(id);
+      const running = scan.status === "queued" || scan.status === "running";
+      const liveEl = document.getElementById("log-live");
+      if (liveEl && running) liveEl.innerHTML = '<span class="live-dot"></span>';
+
+      // While running, poll status + log in place (no full re-render → no flicker).
+      // Do one final full render when the scan finishes.
+      if (running) {
         pollTimer = setInterval(async () => {
           try {
             const s = await API.get(`/api/scans/${id}`);
             const el = document.getElementById("scan-status");
             if (!el) { stopPolling(); return; }  // navigated away
             el.innerHTML = statusBadge(s.status) + (s.status === "running" ? " " + s.progress + "%" : "");
+            await ptLoadLog(id);
             if (s.status === "completed" || s.status === "failed") {
               stopPolling();
               renderScanDetail(id);  // single clean render with the results
             }
           } catch (ex) { stopPolling(); }
-        }, 4000);
+        }, 3000);
       }
     } catch (ex) { view.innerHTML = errBox(ex); }
   }
+  let logOffset = 0;
+  window.ptLoadLog = async (id) => {
+    const con = document.getElementById("scan-console");
+    if (!con) return;
+    try {
+      const d = await API.get(`/api/scans/${id}/log?offset=${logOffset}`);
+      if (d.chunk) {
+        con.textContent += d.chunk;
+        logOffset = d.offset;
+        con.scrollTop = con.scrollHeight;
+      }
+    } catch (ex) { /* ignore transient log poll errors */ }
+  };
+  window.ptEmailScan = (id) => {
+    modal("Email scan report", `
+      <div class="form-row"><label>Recipients (comma-separated)</label>
+        <input id="em-rcpt" placeholder="leave blank to use the configured default recipients"></div>
+      <div class="form-row"><label>Attachments</label>
+        <label class="chk"><input type="checkbox" id="em-pdf" checked> PDF</label>
+        <label class="chk"><input type="checkbox" id="em-csv" checked> CSV</label></div>
+      <button class="btn btn-primary btn-block" onclick="ptSendEmail(${id})">Send</button>
+      <p class="muted small" style="margin-top:8px">Configure SMTP under Settings first. The email body includes the severity summary.</p>`);
+  };
+  window.ptSendEmail = async (id) => {
+    const formats = [];
+    if (document.getElementById("em-pdf").checked) formats.push("pdf");
+    if (document.getElementById("em-csv").checked) formats.push("csv");
+    const recipients = document.getElementById("em-rcpt").value.trim() || null;
+    try {
+      const r = await API.post(`/api/reports/scan/${id}/email`, { recipients, formats });
+      closeModal(); toast(`Emailed to ${r.recipients.join(", ")} (${r.total_findings} findings)`);
+    } catch (ex) { toast(ex.message, "err"); }
+  };
   window.ptSetFindingStatus = async (id, status) => {
     try { await API.patch(`/api/findings/${id}`, { status }); toast("Updated"); }
     catch (ex) { toast(ex.message, "err"); }
@@ -460,7 +506,9 @@
           </select>
           <button class="btn btn-primary" onclick="ptSearchCves()">Search</button>
           <span id="cve-count" class="muted small"></span>
-        </div><div id="cve-results">${loading()}</div>`;
+        </div>
+        <div id="cve-autoupdate" class="card" style="margin-bottom:16px"></div>
+        <div id="cve-results">${loading()}</div>`;
     document.querySelectorAll(".admin-only").forEach((el) => {
       el.style.display = (API.user() || {}).role === "admin" ? "" : "none";
     });
@@ -469,8 +517,60 @@
       const c = await API.get("/api/cves/count");
       document.getElementById("cve-count").textContent = `${c.total} CVEs in local database`;
     } catch {}
+    ptLoadAutoUpdate();
     ptSearchCves();
   }
+  window.ptLoadAutoUpdate = async () => {
+    const box = document.getElementById("cve-autoupdate");
+    if (!box) return;
+    const isAdmin = (API.user() || {}).role === "admin";
+    try {
+      const c = await API.get("/api/cves/update/config");
+      const statusColor = { ok: "var(--ok)", error: "var(--high)", running: "var(--med)", never: "var(--muted)" }[c.last_status] || "var(--muted)";
+      box.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+          <div>
+            <b>🔄 Automatic CVE updates</b>
+            <div class="muted small" style="margin-top:4px">
+              Last run: ${c.last_run ? fmtDate(c.last_run) : "never"} ·
+              status: <span style="color:${statusColor}">${esc(c.last_status)}</span>
+              ${c.last_added ? ` · +${c.last_added} added` : ""}
+              ${c.last_message ? `<br>${esc(c.last_message)}` : ""}
+            </div>
+          </div>
+          <div class="pill-row" style="align-items:center">
+            <label class="chk"><input type="checkbox" id="au-enabled" ${c.enabled ? "checked" : ""} ${isAdmin ? "" : "disabled"}> Enabled</label>
+            every <input id="au-interval" type="number" value="${c.interval_hours}" style="width:64px" ${isAdmin ? "" : "disabled"}> h
+            <select id="au-source" ${isAdmin ? "" : "disabled"}>
+              <option value="online" ${c.source === "online" ? "selected" : ""}>Online (NVD mirror)</option>
+              <option value="feed_dir" ${c.source === "feed_dir" ? "selected" : ""}>Feed directory (offline)</option>
+            </select>
+            ${isAdmin ? `<button class="btn btn-sm btn-primary" onclick="ptSaveAutoUpdate()">Save</button>
+            <button class="btn btn-sm" onclick="ptRunUpdateNow()">Update now</button>` : ""}
+          </div>
+        </div>`;
+    } catch (ex) { box.innerHTML = `<span class="muted small">Auto-update status unavailable: ${esc(ex.message)}</span>`; }
+  };
+  window.ptSaveAutoUpdate = async () => {
+    try {
+      await API.put("/api/cves/update/config", {
+        enabled: document.getElementById("au-enabled").checked,
+        interval_hours: parseInt(document.getElementById("au-interval").value, 10) || 24,
+        source: document.getElementById("au-source").value,
+      });
+      toast("Auto-update settings saved"); ptLoadAutoUpdate();
+    } catch (ex) { toast(ex.message, "err"); }
+  };
+  window.ptRunUpdateNow = async () => {
+    toast("Running CVE update… (online download may take a moment)");
+    try {
+      const r = await API.post("/api/cves/update/run");
+      toast(r.message || `Update done (+${r.imported})`);
+      ptLoadAutoUpdate();
+      const c = await API.get("/api/cves/count");
+      const el = document.getElementById("cve-count"); if (el) el.textContent = `${c.total} CVEs in local database`;
+    } catch (ex) { toast(ex.message, "err"); }
+  };
   window.ptSearchCves = async () => {
     const q = document.getElementById("cve-q").value.trim();
     const sev = document.getElementById("cve-sev").value;
@@ -617,6 +717,58 @@
   window.ptReportDownload = (fmt) =>
     API.download(`/api/reports/export.${fmt}?` + ptReportQuery(), `vulnerability_report.${fmt}`)
       .catch((ex) => toast(ex.message, "err"));
+
+  // ---------- Settings (SMTP / email) ----------
+  async function renderSettings() {
+    view.innerHTML = `<div class="page-head"><h1>Email / SMTP Settings</h1></div>` + loading();
+    try {
+      const c = await API.get("/api/settings/smtp");
+      view.innerHTML = `
+        <div class="page-head"><h1>Email / SMTP Settings</h1></div>
+        <div class="card" style="max-width:620px">
+          <p class="muted small" style="margin-bottom:12px">Configure SMTP here (stored in the database, not in files). Used to email scan reports with the findings summary in the body and PDF/CSV attached.</p>
+          <div class="form-row"><label>SMTP host</label><input id="sm-host" value="${esc(c.host)}" placeholder="smtp.example.com"></div>
+          <div class="grid" style="grid-template-columns:1fr 1fr">
+            <div class="form-row"><label>Port</label><input id="sm-port" type="number" value="${c.port}"></div>
+            <div class="form-row"><label>Encryption</label>
+              <select id="sm-enc">
+                <option value="tls" ${c.use_tls && !c.use_ssl ? "selected" : ""}>STARTTLS (587)</option>
+                <option value="ssl" ${c.use_ssl ? "selected" : ""}>SSL/TLS (465)</option>
+                <option value="none" ${!c.use_tls && !c.use_ssl ? "selected" : ""}>None</option>
+              </select></div>
+          </div>
+          <div class="form-row"><label>Username</label><input id="sm-user" value="${esc(c.username)}" autocomplete="off"></div>
+          <div class="form-row"><label>Password ${c.has_password ? "(leave blank to keep current)" : ""}</label><input id="sm-pass" type="password" autocomplete="new-password" placeholder="${c.has_password ? "••••••••" : ""}"></div>
+          <div class="form-row"><label>From address</label><input id="sm-from" value="${esc(c.from_addr)}" placeholder="scanner@example.com"></div>
+          <div class="form-row"><label>Default recipients (comma-separated)</label><input id="sm-rcpt" value="${esc(c.default_recipients)}" placeholder="soc@example.com, admin@example.com"></div>
+          <div class="form-row"><label class="chk"><input type="checkbox" id="sm-enabled" ${c.enabled ? "checked" : ""}> Enable email features</label></div>
+          <div class="pill-row">
+            <button class="btn btn-primary" onclick="ptSaveSmtp()">Save</button>
+            <button class="btn" onclick="ptTestSmtp()">Send test email</button>
+          </div>
+        </div>`;
+    } catch (ex) { view.innerHTML = errBox(ex); }
+  }
+  window.ptSaveSmtp = async () => {
+    const enc = document.getElementById("sm-enc").value;
+    const body = {
+      host: document.getElementById("sm-host").value.trim(),
+      port: parseInt(document.getElementById("sm-port").value, 10) || 587,
+      username: document.getElementById("sm-user").value.trim(),
+      password: document.getElementById("sm-pass").value || null,
+      from_addr: document.getElementById("sm-from").value.trim(),
+      use_tls: enc === "tls", use_ssl: enc === "ssl",
+      default_recipients: document.getElementById("sm-rcpt").value.trim(),
+      enabled: document.getElementById("sm-enabled").checked,
+    };
+    try { await API.put("/api/settings/smtp", body); toast("SMTP settings saved"); renderSettings(); }
+    catch (ex) { toast(ex.message, "err"); }
+  };
+  window.ptTestSmtp = async () => {
+    toast("Sending test email…");
+    try { const r = await API.post("/api/settings/smtp/test"); toast("Test email sent to " + r.recipients.join(", ")); }
+    catch (ex) { toast(ex.message, "err"); }
+  };
 
   // ---------- Users ----------
   async function renderUsers() {
