@@ -14,7 +14,7 @@ from datetime import datetime
 from .database import SessionLocal, engine, Base
 from .models import CVE, Finding, Host, Scan, Service, WebFinding
 from .config import settings
-from .services import scanner, web_scanner, zap_scanner
+from .services import scanner, web_scanner, zap_scanner, scanlog
 from .services.cve_matcher import correlate_package, correlate_service
 
 
@@ -39,14 +39,19 @@ def _claim_next_scan(db):
 
 def _run_network_scan(db, scan: Scan):
     target = scan.target
+    cb = lambda line: scanlog.log(db, scan, line)
+    targets = scanner.expand_targets(target.address)
+    scanlog.log(db, scan, f"Network scan ({scan.scan_type}) of {len(targets)} target(s): "
+                          f"{', '.join(targets) or target.address}")
     # For custom scans the operator-supplied flags were stashed in scan.profile.
     custom_flags = scan.profile if scan.scan_type == "custom" else None
-    result = scanner.run_scan(target.address, scan.scan_type, custom_flags=custom_flags)
+    result = scanner.run_scan(target.address, scan.scan_type, custom_flags=custom_flags, log_cb=cb)
     scan.profile = result.flags
     scan.raw_output = result.raw_xml[:1_000_000]
     scan.progress = 40
     db.commit()
 
+    scanlog.log(db, scan, "Correlating discovered services against the CVE database…")
     finding_seen = set()
     for phost in result.hosts:
         host = Host(
@@ -55,6 +60,7 @@ def _run_network_scan(db, scan: Scan):
         )
         db.add(host)
         db.flush()
+        scanlog.log(db, scan, f"Host {phost.address} up — {len(phost.services)} open service(s)")
         for psvc in phost.services:
             svc = Service(
                 host_id=host.id, port=psvc.port, protocol=psvc.protocol,
@@ -76,44 +82,46 @@ def _run_network_scan(db, scan: Scan):
                     match_confidence=confidence, match_reason=reason,
                 ))
         db.commit()
+    scanlog.log(db, scan, f"Correlation complete: {len(finding_seen)} finding(s).")
     scan.progress = 95
     db.commit()
 
 
 def _run_web_scan(db, scan: Scan):
     target = scan.target
-    result = web_scanner.run_web_scan(target.address)
     scan.profile = "web-assessment"
-    scan.raw_output = result.summary
-    scan.progress = 50
-    db.commit()
-
-    for f in result.findings:
-        db.add(WebFinding(
-            scan_id=scan.id, target_url=target.address,
-            category=f["category"], name=f["name"], severity=f["severity"],
-            description=f["description"], evidence=f["evidence"],
-            remediation=f["remediation"], references=f["references"], cve_id=f["cve_id"],
-        ))
-    db.commit()
-
-    # Correlate detected server software against the local CVE DB using the precise,
-    # version-aware matcher. Software banners without a version yield no CVEs.
-    for software in result.detected_software:
-        product, version = _split_software(software)
-        if not product or not version:
-            continue
-        for cve, confidence, reason, _fix in correlate_package(db, product, version):
+    urls = scanner.expand_targets(target.address) or [target.address]
+    summaries = []
+    for ui, url in enumerate(urls):
+        scanlog.log(db, scan, f"Built-in web checks against {url}…")
+        result = web_scanner.run_web_scan(url)
+        summaries.append(result.summary)
+        for f in result.findings:
             db.add(WebFinding(
-                scan_id=scan.id, target_url=target.address,
-                category="Software", name=f"{cve.cve_id} affects {software}",
-                severity=cve.severity, cvss_score=cve.cvss_v3_score, cve_id=cve.cve_id,
-                description=cve.description,
-                remediation=f"{reason}. {cve.remediation}",
-                references=cve.references,
-                evidence=f"Server software banner: {software} ({reason})",
+                scan_id=scan.id, target_url=url,
+                category=f["category"], name=f["name"], severity=f["severity"],
+                description=f["description"], evidence=f["evidence"],
+                remediation=f["remediation"], references=f["references"], cve_id=f["cve_id"],
             ))
-    scan.progress = 95
+        # Correlate detected server software (precise, version-aware).
+        for software in result.detected_software:
+            product, version = _split_software(software)
+            if not product or not version:
+                continue
+            for cve, confidence, reason, _fix in correlate_package(db, product, version):
+                db.add(WebFinding(
+                    scan_id=scan.id, target_url=url,
+                    category="Software", name=f"{cve.cve_id} affects {software}",
+                    severity=cve.severity, cvss_score=cve.cvss_v3_score, cve_id=cve.cve_id,
+                    description=cve.description,
+                    remediation=f"{reason}. {cve.remediation}",
+                    references=cve.references,
+                    evidence=f"Server software banner: {software} ({reason})",
+                ))
+        scanlog.log(db, scan, f"{url}: {len(result.findings)} finding(s).")
+        scan.progress = min(95, int(95 * (ui + 1) / len(urls)))
+        db.commit()
+    scan.raw_output = "\n".join(summaries)
     db.commit()
 
 
@@ -131,19 +139,24 @@ def _run_zap_scan(db, scan: Scan, active: bool):
     scan.profile = f"zap-{'active' if active else 'passive'}"
     scan.progress = 10
     db.commit()
-    result = zap_scanner.run_zap_scan(target.address, active=active)
-    scan.raw_output = result.summary
-    scan.progress = 90
-    db.commit()
-    for f in result.findings:
-        db.add(WebFinding(
-            scan_id=scan.id, target_url=target.address,
-            category=f["category"], name=f["name"], severity=f["severity"],
-            cve_id=f.get("cve_id", ""), description=f["description"],
-            evidence=f["evidence"], remediation=f["remediation"],
-            references=f["references"],
-        ))
-    scan.progress = 95
+    cb = lambda line: scanlog.log(db, scan, line)
+    urls = scanner.expand_targets(target.address) or [target.address]
+    summaries = []
+    for ui, url in enumerate(urls):
+        scanlog.log(db, scan, f"OWASP ZAP {'ACTIVE' if active else 'passive'} scan of {url}")
+        result = zap_scanner.run_zap_scan(url, active=active, log_cb=cb)
+        summaries.append(result.summary)
+        for f in result.findings:
+            db.add(WebFinding(
+                scan_id=scan.id, target_url=url,
+                category=f["category"], name=f["name"], severity=f["severity"],
+                cve_id=f.get("cve_id", ""), description=f["description"],
+                evidence=f["evidence"], remediation=f["remediation"],
+                references=f["references"],
+            ))
+        scan.progress = min(95, int(90 * (ui + 1) / len(urls)))
+        db.commit()
+    scan.raw_output = "\n".join(summaries)
     db.commit()
 
 

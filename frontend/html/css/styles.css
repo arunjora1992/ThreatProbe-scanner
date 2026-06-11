@@ -175,3 +175,7 @@ code { background: var(--bg-2); padding: 1px 6px; border-radius: 4px; font-size:
 .chk-group { display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 4px 0; }
 .chk { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; color: var(--text); cursor: pointer; user-select: none; }
 .chk input { width: auto; }
+.console { background: #0a0e14; color: #c7f0d8; border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 12px; line-height: 1.5; max-height: 280px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; }
+.console:empty::before { content: "waiting for scan output…"; color: var(--muted); }
+.live-dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--med); margin-right:6px; animation: blink 1s infinite; }
+@keyframes blink { 50% { opacity: .3; } }

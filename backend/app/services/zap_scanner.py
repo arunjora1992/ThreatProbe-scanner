@@ -141,9 +141,13 @@ def _map_alert(a: dict) -> dict:
     }
 
 
-def run_zap_scan(target_url: str, active: bool = False) -> ZapResult:
+def run_zap_scan(target_url: str, active: bool = False, log_cb=None) -> ZapResult:
     """Run a ZAP spider+passive (and optional active) scan; return mapped findings."""
+    def _log(m):
+        if log_cb:
+            log_cb(m)
     result = ZapResult()
+    _log("Connecting to ZAP daemon…")
     if not wait_for_zap():
         result.summary = "ZAP daemon is not reachable."
         result.add(category="ZAP", name="ZAP engine unavailable", severity="INFO",
@@ -165,14 +169,19 @@ def run_zap_scan(target_url: str, active: bool = False) -> ZapResult:
     except Exception:
         pass
 
+    _log(f"Spidering {url} (max {settings.zap_spider_max_minutes} min)…")
     spider_deadline = time.time() + settings.zap_spider_max_minutes * 60
     result.urls_found = _spider(url, spider_deadline)
+    _log(f"Spider done: {result.urls_found} URL(s) discovered. Draining passive scan…")
     _wait_passive(spider_deadline + 120)
 
     if active:
+        _log(f"Active scan started (intrusive; max {settings.zap_active_max_minutes} min)…")
         active_deadline = time.time() + settings.zap_active_max_minutes * 60
         _active(url, active_deadline)
+        _log("Active scan complete. Draining passive scan…")
         _wait_passive(time.time() + 60)
+    _log("Collecting alerts…")
 
     # Collapse ZAP's per-URL instances into one finding per (alert type, severity),
     # recording how many URLs were affected.

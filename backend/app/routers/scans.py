@@ -128,6 +128,18 @@ def scan_web_findings(scan_id: int, db: Session = Depends(get_db),
     ]
 
 
+@router.get("/{scan_id}/log")
+def scan_log(scan_id: int, offset: int = 0, db: Session = Depends(get_db),
+             _: User = Depends(get_current_user)):
+    """Return the live scan log from a character offset (for the terminal-style view)."""
+    scan = db.get(Scan, scan_id)
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    log = scan.log or ""
+    return {"offset": len(log), "chunk": log[offset:] if offset < len(log) else "",
+            "status": scan.status, "progress": scan.progress}
+
+
 @router.get("/{scan_id}/packages")
 def scan_packages(scan_id: int, only_vulnerable: bool = False, q: str | None = None,
                   db: Session = Depends(get_db), _: User = Depends(get_current_user)):

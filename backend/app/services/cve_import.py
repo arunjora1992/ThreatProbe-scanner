@@ -275,6 +275,22 @@ def upsert_records(db: Session, records: List[dict]) -> Tuple[int, int]:
     return imported, updated
 
 
+def import_single_file(db: Session, path: str) -> dict:
+    """Import one feed file (used by the online auto-updater)."""
+    try:
+        records = _records_from_file(path)
+    except (json.JSONDecodeError, OSError) as exc:
+        return {"imported": 0, "updated": 0, "files_processed": 0,
+                "message": f"Failed to read {path}: {exc}"}
+    imp = upd = 0
+    for i in range(0, len(records), 2000):
+        a, b = upsert_records(db, records[i:i + 2000])
+        imp += a
+        upd += b
+    return {"imported": imp, "updated": upd, "files_processed": 1,
+            "message": f"{imp} new, {upd} updated from {os.path.basename(path)}."}
+
+
 def import_feed_directory(db: Session, directory: Optional[str] = None) -> dict:
     """Import every .json/.json.gz feed in the directory."""
     directory = directory or settings.cve_feed_dir
