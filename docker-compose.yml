@@ -24,6 +24,9 @@ services:
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
       CVE_FEED_DIR: /data/cve_feeds
+      # Authenticated ZAP scans run in the backend (creds stay in-memory), so the
+      # backend talks to the ZAP daemon directly too.
+      ZAP_API_URL: http://zap:8090
     volumes:
       - ./data:/data
     depends_on:

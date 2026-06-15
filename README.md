@@ -228,8 +228,8 @@ docker compose logs -f worker      # "[worker] started; ... nmap=available"
 | **Host discovery** (`discovery`)    | `-sn`                     | Ping sweep — which hosts in a range are up. |
 | **Port scan** (`port`)              | `-sT -T4 --open`          | Open ports only (no version detection). |
 | **Web / URL penetration test** (`web`) | _n/a_                  | Built-in lightweight, non-destructive checks against the target URL (see below), incl. precise software→CVE correlation. |
-| **Web app scan — ZAP passive** (`zap_passive`) | _OWASP ZAP_ | Spider/crawl + passive analysis via OWASP ZAP. Non-destructive (no attack payloads). Many more findings than the built-in scanner. |
-| **Web app scan — ZAP active** (`zap_active`) | _OWASP ZAP_ | Spider then **active** attack (XSS, SQLi, injection, traversal…). **Intrusive — authorized targets only.** |
+| **Web app scan — ZAP passive** (`zap_passive`) | _OWASP ZAP_ | Spider/crawl + passive analysis via OWASP ZAP. Non-destructive (no attack payloads). Many more findings than the built-in scanner. Optionally **authenticated** (logs in for deeper coverage). |
+| **Web app scan — ZAP active** (`zap_active`) | _OWASP ZAP_ | Spider then **active** attack (XSS, SQLi, injection, traversal…). **Intrusive — authorized targets only.** Optionally **authenticated** (logs in for deeper coverage). |
 | **Custom** (`custom`)               | operator-supplied         | Any nmap flags you provide, e.g. `-sT -sV -p 1-1000 --script vuln`. |
 
 ### Web application scanning — built-in vs OWASP ZAP
@@ -251,6 +251,31 @@ There are two web engines:
 > (capped at 2 GB in compose) and writes session data; on a disk-constrained host keep
 > active scans scoped. The ZAP session is reset at the start of each scan to bound disk
 > use.
+
+#### Authenticated ZAP scans (deeper coverage)
+
+Both `zap_passive` and `zap_active` can run **as a logged-in user**. Unauthenticated
+scans only see public pages, so they miss the bulk of an application's attack surface;
+supplying a login lets ZAP crawl and attack the pages behind authentication, which is
+where most real vulnerabilities are. In the launch dialog, expand the **Authenticated
+scan** section and provide:
+
+- **Auth type** — `form` (HTML login form), `json` (SPA/API login endpoint), or
+  `http` (HTTP Basic / NTLM).
+- **Username / password**, and (for form/json) the **login URL** the credentials are
+  POSTed to plus the **field names** for the username and password.
+- *(Optional)* **extra login params** (e.g. a CSRF token / submit button), and
+  **logged-in / logged-out indicator** regexes so ZAP can detect session expiry and
+  re-authenticate mid-scan (e.g. logged-in `\bLogout\b`).
+
+Under the hood the platform creates a ZAP context, configures the chosen authentication
+method, registers a user with the supplied credentials, and runs the spider + active
+scan **as that user** (`scanAsUser`). Leaving the username blank runs the normal
+anonymous scan.
+
+Like credentialed Linux scans, **authenticated ZAP scans run inside the backend** (not
+the DB worker) so the login credentials are held **in memory only and never written to
+the database or logs**; they start immediately rather than queueing.
 
 ### Credentialed Linux assessment (authenticated package VA)
 

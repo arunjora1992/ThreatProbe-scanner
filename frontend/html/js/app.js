@@ -238,6 +238,25 @@
           <div class="form-row"><label>Key passphrase (optional)</label><input id="s-keypass" type="password" autocomplete="new-password"></div>
         </div>
       </div>
+      <div id="s-zap-rows" class="hidden">
+        <div class="card" style="background:var(--bg-2);margin-bottom:6px">
+          <p class="small muted" style="margin-bottom:10px">🔐 <b>Authenticated scan (optional)</b> — supply a login so ZAP crawls and tests pages behind authentication for a much deeper scan. Credentials are used in-memory only and are <b>never stored</b>. Leave the username blank for an anonymous scan.</p>
+          <div class="form-row"><label>Auth type</label>
+            <select id="s-zap-authtype">
+              <option value="form">Form-based login (HTML login form)</option>
+              <option value="json">JSON login (SPA / API endpoint)</option>
+              <option value="http">HTTP Basic / NTLM</option>
+            </select></div>
+          <div class="form-row"><label>Login username</label><input id="s-zap-user" placeholder="e.g. testuser" autocomplete="off"></div>
+          <div class="form-row"><label>Login password</label><input id="s-zap-pass" type="password" autocomplete="new-password"></div>
+          <div class="form-row"><label>Login URL</label><input id="s-zap-loginurl" placeholder="https://site/login (where credentials are POSTed)"></div>
+          <div class="form-row"><label>Username field name</label><input id="s-zap-userfield" value="username"></div>
+          <div class="form-row"><label>Password field name</label><input id="s-zap-passfield" value="password"></div>
+          <div class="form-row"><label>Extra login params (optional)</label><input id="s-zap-extra" placeholder="csrf_token=abc&submit=Login"></div>
+          <div class="form-row"><label>Logged-in indicator regex (optional)</label><input id="s-zap-inregex" placeholder="e.g. \\bLogout\\b — helps ZAP re-login on session expiry"></div>
+          <div class="form-row"><label>Logged-out indicator regex (optional)</label><input id="s-zap-outregex" placeholder="e.g. Login|Sign in"></div>
+        </div>
+      </div>
       <button class="btn btn-primary btn-block" onclick="ptStartScan(${id})">Start scan</button>
       <p class="muted small" style="margin-top:10px">For web tests, set the target address to a URL (http/https). Only scan systems you are authorized to test.</p>`);
   };
@@ -246,6 +265,8 @@
     document.getElementById("s-custom-row").classList.toggle("hidden", v !== "custom");
     document.getElementById("s-cred-rows").classList.toggle("hidden", v !== "credentialed");
     document.getElementById("s-zap-warn").classList.toggle("hidden", v !== "zap_active");
+    document.getElementById("s-zap-rows").classList.toggle(
+      "hidden", v !== "zap_passive" && v !== "zap_active");
   };
   window.ptStartScan = async (target_id) => {
     const scan_type = document.getElementById("s-type").value;
@@ -259,6 +280,25 @@
       body.ssh_port = parseInt(document.getElementById("s-port").value, 10) || 22;
       if (!body.ssh_username || (!body.ssh_password && !body.ssh_key)) {
         toast("Username and a password or private key are required", "err"); return;
+      }
+    }
+    if (scan_type === "zap_passive" || scan_type === "zap_active") {
+      const zu = document.getElementById("s-zap-user").value.trim();
+      if (zu) {  // authenticated scan requested
+        const at = document.getElementById("s-zap-authtype").value;
+        const loginUrl = document.getElementById("s-zap-loginurl").value.trim();
+        if (at !== "http" && !loginUrl) {
+          toast("Form/JSON authenticated scans require a login URL", "err"); return;
+        }
+        body.zap_username = zu;
+        body.zap_password = document.getElementById("s-zap-pass").value || null;
+        body.zap_auth_type = at;
+        body.zap_login_url = loginUrl || null;
+        body.zap_username_field = document.getElementById("s-zap-userfield").value.trim() || "username";
+        body.zap_password_field = document.getElementById("s-zap-passfield").value.trim() || "password";
+        body.zap_extra_post_data = document.getElementById("s-zap-extra").value.trim() || null;
+        body.zap_logged_in_regex = document.getElementById("s-zap-inregex").value.trim() || null;
+        body.zap_logged_out_regex = document.getElementById("s-zap-outregex").value.trim() || null;
       }
     }
     try {

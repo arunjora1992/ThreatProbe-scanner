@@ -57,6 +57,18 @@ class ScanCreate(BaseModel):
     ssh_key: Optional[str] = None
     ssh_key_passphrase: Optional[str] = None
     ssh_port: int = 22
+    # Web-app login for authenticated ZAP scans (scan_type == zap_passive/zap_active).
+    # Supplying these runs a deeper, logged-in crawl/attack. NEVER persisted —
+    # used in-memory by the backend for the duration of the scan only.
+    zap_username: Optional[str] = None
+    zap_password: Optional[str] = None
+    zap_login_url: Optional[str] = None
+    zap_auth_type: str = "form"               # form | json | http
+    zap_username_field: str = "username"
+    zap_password_field: str = "password"
+    zap_extra_post_data: Optional[str] = None
+    zap_logged_in_regex: Optional[str] = None
+    zap_logged_out_regex: Optional[str] = None
 
 
 class ScanOut(BaseModel):
