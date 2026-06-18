@@ -23,6 +23,7 @@ never persisted.
 import json
 import re
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
@@ -33,6 +34,10 @@ from ..config import settings
 # ZAP risk -> our severity
 _RISK_SEV = {"High": "HIGH", "Medium": "MEDIUM", "Low": "LOW", "Informational": "INFO"}
 
+# Fixed names for the authenticated-scan context/user (one per scan session).
+_CONTEXT_NAME = "auth-scan"
+_USER_NAME = "scan-user"
+
 
 @dataclass
 class ZapAuth:
@@ -42,6 +47,13 @@ class ZapAuth:
       form  - form-based login (POST username/password to login_url)
       json  - JSON login (POST a JSON body to login_url) — common for SPAs/APIs
       http  - HTTP/NTLM Basic authentication (no login form)
+
+    session ("cookie" | "header"):
+      cookie - the app keeps the session in a cookie (traditional server-rendered apps).
+      header - the app returns a token (e.g. a JWT) that the client replays in a request
+               header, typically `Authorization: Bearer <token>` (SPAs / APIs). ZAP must
+               extract that token from the login response and re-send it on every request,
+               otherwise the session is lost and the scan only sees public pages.
     """
     auth_type: str = "form"               # form | json | http
     username: str = ""
@@ -52,6 +64,10 @@ class ZapAuth:
     extra_post_data: str = ""             # extra "k=v&k2=v2" appended to the login body
     logged_in_regex: str = ""             # regex matching a logged-IN response (e.g. "Logout")
     logged_out_regex: str = ""            # regex matching a logged-OUT response (e.g. "Login")
+    # Session management (for token/bearer SPAs):
+    session: str = "cookie"               # cookie | header
+    token_field: str = "token"            # JSON field/path in the login response holding the token
+    session_headers: str = ""             # advanced: full header template(s); overrides token_field
 
     def configured(self) -> bool:
         if not self.username:
@@ -59,6 +75,17 @@ class ZapAuth:
         if self.auth_type in ("form", "json"):
             return bool(self.login_url)
         return True  # http basic just needs credentials
+
+    def header_template(self) -> str:
+        """Header(s) to replay on every request for header/token session management.
+
+        Newline-separated. `{%json:<field>%}` is substituted by ZAP with the matching
+        value from the login response body.
+        """
+        if self.session_headers.strip():
+            return self.session_headers.strip()
+        field = (self.token_field or "token").strip()
+        return f"Authorization: Bearer {{%json:{field}%}}"
 
 
 @dataclass
@@ -78,8 +105,12 @@ def _normalize_url(raw: str) -> str:
     return raw
 
 
-def _api(path: str, params: dict = None, timeout: int = 60):
-    """Call a ZAP JSON API endpoint and return the parsed dict."""
+def _api(path: str, params: dict = None, timeout: int = 60, retries: int = 4):
+    """Call a ZAP JSON API endpoint and return the parsed dict.
+
+    Retries briefly on connection errors so a transient ZAP hiccup/restart (e.g. while
+    the AJAX spider's browser is starting) doesn't hard-fail the whole scan.
+    """
     params = dict(params or {})
     if settings.zap_api_key:
         params["apikey"] = settings.zap_api_key
@@ -87,8 +118,15 @@ def _api(path: str, params: dict = None, timeout: int = 60):
     url = f"{settings.zap_api_url}{path}"
     if qs:
         url += f"?{qs}"
-    with urllib.request.urlopen(url, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8", errors="replace"))
+    last_exc = None
+    for attempt in range(retries):
+        try:
+            with urllib.request.urlopen(url, timeout=timeout) as resp:
+                return json.loads(resp.read().decode("utf-8", errors="replace"))
+        except (urllib.error.URLError, ConnectionError, OSError) as exc:
+            last_exc = exc
+            time.sleep(min(2 + attempt * 2, 8))  # back off while ZAP comes back up
+    raise last_exc
 
 
 def zap_available() -> bool:
@@ -139,10 +177,10 @@ def _setup_auth(url: str, auth: "ZapAuth", log) -> Optional[tuple]:
     then falls back to an unauthenticated scan).
     """
     try:
-        ctx = _api("/JSON/context/action/newContext/", {"contextName": "auth-scan"})
+        ctx = _api("/JSON/context/action/newContext/", {"contextName": _CONTEXT_NAME})
         context_id = ctx.get("contextId")
         _api("/JSON/context/action/includeInContext/",
-             {"contextName": "auth-scan", "regex": _context_regex(url)})
+             {"contextName": _CONTEXT_NAME, "regex": _context_regex(url)})
 
         if auth.auth_type in ("form", "json"):
             method = "formBasedAuthentication" if auth.auth_type == "form" else "jsonBasedAuthentication"
@@ -175,8 +213,24 @@ def _setup_auth(url: str, auth: "ZapAuth", log) -> Optional[tuple]:
             _api("/JSON/authentication/action/setLoggedOutIndicator/",
                  {"contextId": context_id, "loggedOutIndicatorRegex": auth.logged_out_regex})
 
+        # Session management: header/token (bearer SPAs) vs the default cookie session.
+        if auth.session == "header":
+            tmpl = auth.header_template()
+            # methodConfigParams is itself a query string ZAP re-parses and URL-decodes,
+            # so the inner value MUST be percent-encoded — otherwise the `%` in tokens
+            # like `{%json:token%}` is read as a malformed escape and the headers are
+            # silently dropped (token never replayed).
+            cfg = "headers=" + urllib.parse.quote(tmpl, safe="")
+            _api("/JSON/sessionManagement/action/setSessionManagementMethod/",
+                 {"contextId": context_id, "methodName": "headerBasedSessionManagement",
+                  "methodConfigParams": cfg})
+            log(f"Session management: header/token — replaying '{tmpl}'.")
+        else:
+            _api("/JSON/sessionManagement/action/setSessionManagementMethod/",
+                 {"contextId": context_id, "methodName": "cookieBasedSessionManagement"})
+
         user = _api("/JSON/users/action/newUser/",
-                    {"contextId": context_id, "name": "scan-user"})
+                    {"contextId": context_id, "name": _USER_NAME})
         user_id = user.get("userId")
         creds = ("username=" + urllib.parse.quote(auth.username, safe="") +
                  "&password=" + urllib.parse.quote(auth.password, safe=""))
@@ -215,6 +269,65 @@ def _spider(url: str, deadline: float, ctx: Optional[tuple] = None) -> int:
     try:
         results = _api("/JSON/spider/view/results/", {"scanId": scan_id}).get("results", [])
         return len(results)
+    except Exception:
+        return 0
+
+
+def _ajax_spider(url: str, deadline: float, ctx: Optional[tuple] = None) -> int:
+    """Browser-driven crawl for JavaScript/SPA apps (discovers client-rendered routes
+    and the API calls behind them, which the traditional spider can't see).
+
+    Returns the number of URLs the AJAX spider found (0 on any failure — it is
+    best-effort and must never abort the rest of the scan).
+    """
+    for path, key, val in (
+        ("/JSON/ajaxSpider/action/setOptionBrowserId/", "String", settings.zap_ajax_browser),
+        ("/JSON/ajaxSpider/action/setOptionMaxDuration/", "Integer", settings.zap_ajax_max_minutes),
+        ("/JSON/ajaxSpider/action/setOptionMaxCrawlDepth/", "Integer", settings.zap_ajax_max_crawl_depth),
+        # Critical: ZAP defaults to one browser per CPU core (e.g. 16) — pinning this low
+        # keeps memory bounded and stops the daemon crashing on browser teardown.
+        ("/JSON/ajaxSpider/action/setOptionNumberOfBrowsers/", "Integer", settings.zap_ajax_browsers),
+        ("/JSON/ajaxSpider/action/setOptionMaxCrawlStates/", "Integer", settings.zap_ajax_max_crawl_states),
+    ):
+        try:
+            _api(path, {key: val})
+        except Exception:
+            pass  # option names vary slightly by version; best-effort
+    try:
+        if ctx:
+            # AJAX spider addresses the context/user by NAME (not id).
+            _api("/JSON/ajaxSpider/action/scanAsUser/",
+                 {"contextName": _CONTEXT_NAME, "userName": _USER_NAME,
+                  "url": url, "subtreeOnly": "false"}, timeout=60)
+        else:
+            _api("/JSON/ajaxSpider/action/scan/",
+                 {"url": url, "inScope": "false", "subtreeOnly": "false"}, timeout=60)
+    except Exception:
+        return 0
+    # The browser can take several seconds to launch; don't conclude "done" until we've
+    # actually observed it running (or the grace window passes), so we never exit at 0
+    # prematurely.
+    started = False
+    grace = time.time() + 45
+    while time.time() < deadline:
+        try:
+            status = _api("/JSON/ajaxSpider/view/status/").get("status", "stopped")
+        except Exception:
+            time.sleep(3)
+            continue
+        if status == "running":
+            started = True
+        elif started or time.time() > grace:
+            break
+        time.sleep(3)
+    else:
+        # deadline hit while still running — stop the browser crawl cleanly.
+        try:
+            _api("/JSON/ajaxSpider/action/stop/")
+        except Exception:
+            pass
+    try:
+        return int(_api("/JSON/ajaxSpider/view/numberOfResults/").get("numberOfResults", 0))
     except Exception:
         return 0
 
@@ -284,11 +397,14 @@ def _map_alert(a: dict) -> dict:
 
 
 def run_zap_scan(target_url: str, active: bool = False, log_cb=None,
-                 auth: "Optional[ZapAuth]" = None) -> ZapResult:
+                 auth: "Optional[ZapAuth]" = None, ajax_spider: bool = False) -> ZapResult:
     """Run a ZAP spider+passive (and optional active) scan; return mapped findings.
 
     If `auth` is supplied and configured, the scan logs in first and crawls/attacks
     the target as the authenticated user for deeper coverage.
+
+    If `ajax_spider` is true, a browser-driven AJAX crawl runs after the traditional
+    spider to discover JavaScript/SPA routes and the API calls behind them.
     """
     def _log(m):
         if log_cb:
@@ -333,6 +449,15 @@ def run_zap_scan(target_url: str, active: bool = False, log_cb=None,
     _log(f"Spider done: {result.urls_found} URL(s) discovered. Draining passive scan…")
     _wait_passive(spider_deadline + 120)
 
+    if ajax_spider:
+        _log(f"AJAX spider (browser-driven, for JS/SPA apps) starting; "
+             f"max {settings.zap_ajax_max_minutes} min…")
+        ajax_deadline = time.time() + settings.zap_ajax_max_minutes * 60
+        ajax_found = _ajax_spider(url, ajax_deadline, ctx)
+        result.urls_found = max(result.urls_found, ajax_found)
+        _log(f"AJAX spider done: {ajax_found} URL(s) in the crawl. Draining passive scan…")
+        _wait_passive(time.time() + 120)
+
     if active:
         _log(f"Active scan started (intrusive; max {settings.zap_active_max_minutes} min"
              f"{', authenticated' if ctx else ''})…")
@@ -363,8 +488,13 @@ def run_zap_scan(target_url: str, active: bool = False, log_cb=None,
     for f in result.findings:
         counts[f["severity"]] = counts.get(f["severity"], 0) + 1
     mode = "active" if active else "passive"
-    auth_note = " (authenticated)" if result.authenticated else ""
-    result.summary = (f"ZAP {mode}{auth_note} scan of {url}: {result.urls_found} URLs crawled, "
+    notes = []
+    if result.authenticated:
+        notes.append("authenticated")
+    if ajax_spider:
+        notes.append("ajax-spider")
+    note_str = f" ({', '.join(notes)})" if notes else ""
+    result.summary = (f"ZAP {mode}{note_str} scan of {url}: {result.urls_found} URLs crawled, "
                       f"{len(result.findings)} alerts (" +
                       ", ".join(f"{v} {k}" for k, v in counts.items()) + ").")
     return result

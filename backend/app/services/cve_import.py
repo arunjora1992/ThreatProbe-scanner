@@ -15,8 +15,9 @@ import gzip
 import json
 import lzma
 import os
+import zlib
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Iterator, List, Optional, Tuple
 
 from dateutil import parser as dateparser
 from sqlalchemy.orm import Session
@@ -248,9 +249,75 @@ def _records_from_file(path: str) -> List[dict]:
             rec = _parse_nvd_20_item(item)
             if rec:
                 records.append(rec)
+    elif isinstance(data, dict) and isinstance(data.get("cves"), list):
+        # ThreatProbe CVE DB export (from another deployment) — see export_cves().
+        records = [_normalize_export_record(r) for r in data["cves"]]
+        records = [r for r in records if r]
     elif isinstance(data, list):  # plain list of our own CVE dicts (seed format)
-        records = data
+        records = [_normalize_export_record(r) for r in data]
+        records = [r for r in records if r]
     return records
+
+
+# Columns that a CVE export/seed record may set (must match the CVE model).
+_CVE_FIELDS = (
+    "cve_id", "description", "cvss_v3_score", "cvss_v3_vector", "cvss_v2_score",
+    "severity", "published", "last_modified", "cpe_products", "affected",
+    "references", "remediation", "cwe",
+)
+
+
+def _normalize_export_record(rec: dict) -> Optional[dict]:
+    """Coerce an exported/seed CVE dict into a DB-ready record.
+
+    Keeps only known columns and parses ISO date strings back into datetimes so the
+    record can be passed straight to CVE(**rec) / upsert.
+    """
+    if not isinstance(rec, dict) or not rec.get("cve_id"):
+        return None
+    out = {k: rec[k] for k in _CVE_FIELDS if k in rec}
+    for date_key in ("published", "last_modified"):
+        val = out.get(date_key)
+        if isinstance(val, str):
+            out[date_key] = _parse_date(val)
+    return out
+
+
+def export_cves(db: Session, batch: int = 5000) -> Iterator[bytes]:
+    """Stream the entire CVE table as a gzip-compressed JSON document.
+
+    Memory stays bounded (rows are streamed with yield_per and gzip-compressed on the
+    fly), so this scales to the full multi-hundred-thousand-row database. The output is
+    a `{"format": "...", "cves": [ ... ]}` document that import_single_file / the upload
+    endpoint and the offline feed importer all understand.
+    """
+    comp = zlib.compressobj(6, zlib.DEFLATED, 31)  # wbits 31 => gzip container
+
+    def emit(text: str) -> bytes:
+        return comp.compress(text.encode("utf-8"))
+
+    head = emit('{"format":"threatprobe-cve-export","version":1,"cves":[')
+    if head:
+        yield head
+    first = True
+    for c in db.query(CVE).yield_per(batch):
+        rec = {
+            "cve_id": c.cve_id, "description": c.description,
+            "cvss_v3_score": c.cvss_v3_score, "cvss_v3_vector": c.cvss_v3_vector,
+            "cvss_v2_score": c.cvss_v2_score, "severity": c.severity,
+            "published": c.published.isoformat() if c.published else None,
+            "last_modified": c.last_modified.isoformat() if c.last_modified else None,
+            "cpe_products": c.cpe_products, "affected": c.affected,
+            "references": c.references, "remediation": c.remediation, "cwe": c.cwe,
+        }
+        chunk = ("" if first else ",") + json.dumps(rec, separators=(",", ":"))
+        first = False
+        out = emit(chunk)
+        if out:
+            yield out
+    tail = emit("]}") + comp.flush()
+    if tail:
+        yield tail
 
 
 def upsert_records(db: Session, records: List[dict]) -> Tuple[int, int]:

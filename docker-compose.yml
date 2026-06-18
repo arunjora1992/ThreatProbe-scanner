@@ -72,6 +72,13 @@ services:
       # metaspace + threads) stays well under the cgroup limit. Active scanning spikes
       # memory; without these caps it OOM-killed the container.
       JAVA_TOOL_OPTIONS: "-Xmx1280m -XX:MaxDirectMemorySize=384m -XX:MaxMetaspaceSize=256m -XX:+UseContainerSupport"
+    # The AJAX spider (JS/SPA crawling) launches a headless Firefox inside this container.
+    # Browsers crash on the Docker default 64 MB /dev/shm, and their sandbox needs to
+    # create user namespaces (blocked by the default seccomp profile) — without these two
+    # the browser dies and takes the ZAP daemon down with it (the OOM/restart we hit).
+    shm_size: "1gb"
+    security_opt:
+      - seccomp:unconfined
     mem_limit: 4g
     memswap_limit: 4g
     healthcheck:

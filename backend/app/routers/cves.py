@@ -1,15 +1,22 @@
-"""Local CVE database: search, detail, and offline NVD feed import."""
-from fastapi import APIRouter, Depends, HTTPException, Query
+"""Local CVE database: search, detail, offline NVD feed import, and DB export/upload."""
+import os
+import shutil
+import tempfile
+from datetime import datetime
+
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi.responses import StreamingResponse
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from pydantic import BaseModel
 
 from ..auth import get_current_user, require_admin
+from ..config import settings
 from ..database import get_db
 from ..models import CVE, User
 from ..schemas import CVEImportResult, CVEOut
-from ..services.cve_import import import_feed_directory
+from ..services.cve_import import export_cves, import_feed_directory, import_single_file
 from ..services import cve_updater
 
 
@@ -56,6 +63,56 @@ def import_feeds(db: Session = Depends(get_db), _: User = Depends(require_admin)
     """Import every NVD JSON feed found in the mounted feed directory."""
     result = import_feed_directory(db)
     return CVEImportResult(**result)
+
+
+@router.get("/export")
+def export_cve_db(db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+    """Download the entire local CVE database as a gzipped JSON file.
+
+    Use this to seed an air-gapped deployment that can't reach NVD: export here, copy the
+    file across, and upload it via POST /api/cves/upload (or drop it in the feed dir).
+    """
+    stamp = datetime.utcnow().strftime("%Y%m%d")
+    filename = f"threatprobe-cve-db-{stamp}.json.gz"
+    return StreamingResponse(
+        export_cves(db),
+        media_type="application/gzip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/upload", response_model=CVEImportResult)
+def upload_cve_db(file: UploadFile = File(...), db: Session = Depends(get_db),
+                  _: User = Depends(require_admin)):
+    """Import a CVE database export (or any NVD JSON feed) uploaded from another deployment.
+
+    The upload is streamed to disk first so memory stays bounded on large databases, then
+    imported with the standard batched upsert (insert new CVEs, update existing ones).
+    """
+    name = os.path.basename(file.filename or "upload.json")
+    if not name.endswith((".json", ".json.gz", ".gz", ".json.xz")):
+        raise HTTPException(
+            status_code=400,
+            detail="Expected a .json, .json.gz or .json.xz file (CVE DB export or NVD feed).",
+        )
+    # Persist into the mounted feed dir when available (so it can be re-imported later),
+    # otherwise a temp dir. Stream the body to avoid loading it all into memory.
+    dest_dir = settings.cve_feed_dir if os.path.isdir(settings.cve_feed_dir) else tempfile.gettempdir()
+    suffix = ".json.gz" if name.endswith(".gz") else (".json.xz" if name.endswith(".xz") else ".json")
+    fd, path = tempfile.mkstemp(prefix="cve-upload-", suffix=suffix, dir=dest_dir)
+    try:
+        with os.fdopen(fd, "wb") as out:
+            shutil.copyfileobj(file.file, out, length=1024 * 1024)
+        result = import_single_file(db, path)
+        if not result.get("files_processed"):
+            raise HTTPException(status_code=400,
+                                detail=result.get("message", "No CVE records found in the upload."))
+        return CVEImportResult(**result)
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
 
 
 def _update_config_out(cfg):

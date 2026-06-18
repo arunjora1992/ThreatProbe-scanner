@@ -62,6 +62,9 @@ const API = (() => {
     patch: (p, body) => request(p, { method: "PATCH", body: JSON.stringify(body) }),
     put: (p, body) => request(p, { method: "PUT", body: JSON.stringify(body) }),
     del: (p) => request(p, { method: "DELETE" }),
+    // multipart/form-data POST (file uploads) — FormData passed through untouched so the
+    // browser sets the multipart boundary itself.
+    postForm: (p, formData) => request(p, { method: "POST", body: formData }),
     // download a file (uses token via query-less fetch then blob)
     download: async (path, filename) => {
       const res = await fetch(path, { headers: { Authorization: "Bearer " + token() } });

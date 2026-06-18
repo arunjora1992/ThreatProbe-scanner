@@ -69,6 +69,11 @@ class ScanCreate(BaseModel):
     zap_extra_post_data: Optional[str] = None
     zap_logged_in_regex: Optional[str] = None
     zap_logged_out_regex: Optional[str] = None
+    # Session management for token/bearer SPAs and the browser-driven AJAX spider.
+    zap_session: str = "cookie"               # cookie | header
+    zap_token_field: Optional[str] = None     # JSON field in the login response holding the token
+    zap_session_headers: Optional[str] = None  # advanced: full header template override
+    zap_ajax_spider: bool = False             # browser-driven crawl for JS/SPA apps
 
 
 class ScanOut(BaseModel):

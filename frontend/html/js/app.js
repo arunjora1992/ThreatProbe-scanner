@@ -240,9 +240,10 @@
       </div>
       <div id="s-zap-rows" class="hidden">
         <div class="card" style="background:var(--bg-2);margin-bottom:6px">
+          <div class="form-row"><label class="muted small"><input type="checkbox" id="s-zap-ajax" style="width:auto"> <b>Use AJAX spider</b> (browser-driven) — required to crawl JavaScript / SPA apps (Angular, React, Vue) whose routes the normal spider can't see</label></div>
           <p class="small muted" style="margin-bottom:10px">🔐 <b>Authenticated scan (optional)</b> — supply a login so ZAP crawls and tests pages behind authentication for a much deeper scan. Credentials are used in-memory only and are <b>never stored</b>. Leave the username blank for an anonymous scan.</p>
           <div class="form-row"><label>Auth type</label>
-            <select id="s-zap-authtype">
+            <select id="s-zap-authtype" onchange="ptZapAuthHint()">
               <option value="form">Form-based login (HTML login form)</option>
               <option value="json">JSON login (SPA / API endpoint)</option>
               <option value="http">HTTP Basic / NTLM</option>
@@ -250,8 +251,18 @@
           <div class="form-row"><label>Login username</label><input id="s-zap-user" placeholder="e.g. testuser" autocomplete="off"></div>
           <div class="form-row"><label>Login password</label><input id="s-zap-pass" type="password" autocomplete="new-password"></div>
           <div class="form-row"><label>Login URL</label><input id="s-zap-loginurl" placeholder="https://site/login (where credentials are POSTed)"></div>
+          <p class="small muted" id="s-zap-loginhint" style="margin:-4px 0 8px;display:none">⚠ For SPAs this is the <b>login API endpoint</b> (e.g. <code>/api/auth/login</code>, <code>/rest/user/login</code>) that accepts the POST — <b>not</b> the sign-in page route.</p>
           <div class="form-row"><label>Username field name</label><input id="s-zap-userfield" value="username"></div>
           <div class="form-row"><label>Password field name</label><input id="s-zap-passfield" value="password"></div>
+          <div class="form-row"><label>Session handling</label>
+            <select id="s-zap-session" onchange="ptZapSessionFields()">
+              <option value="cookie">Cookie session (traditional server-rendered apps)</option>
+              <option value="header">Bearer token in header (SPA / API — token from login response)</option>
+            </select></div>
+          <div id="s-zap-token-rows" style="display:none">
+            <div class="form-row"><label>Token field (in login JSON)</label><input id="s-zap-tokenfield" value="token" placeholder="e.g. token, access_token, data.token, authentication.token"></div>
+            <div class="form-row"><label>Custom session header(s) (optional)</label><input id="s-zap-sessionhdr" placeholder="Authorization: Bearer {%json:token%}  (overrides token field)"></div>
+          </div>
           <div class="form-row"><label>Extra login params (optional)</label><input id="s-zap-extra" placeholder="csrf_token=abc&submit=Login"></div>
           <div class="form-row"><label>Logged-in indicator regex (optional)</label><input id="s-zap-inregex" placeholder="e.g. \\bLogout\\b — helps ZAP re-login on session expiry"></div>
           <div class="form-row"><label>Logged-out indicator regex (optional)</label><input id="s-zap-outregex" placeholder="e.g. Login|Sign in"></div>
@@ -268,6 +279,19 @@
     document.getElementById("s-zap-rows").classList.toggle(
       "hidden", v !== "zap_passive" && v !== "zap_active");
   };
+  window.ptZapSessionFields = () => {
+    const header = document.getElementById("s-zap-session").value === "header";
+    document.getElementById("s-zap-token-rows").style.display = header ? "" : "none";
+  };
+  window.ptZapAuthHint = () => {
+    // Nudge towards header/token session + the API endpoint when JSON auth is chosen.
+    const isJson = document.getElementById("s-zap-authtype").value === "json";
+    document.getElementById("s-zap-loginhint").style.display = isJson ? "" : "none";
+    if (isJson && document.getElementById("s-zap-session").value === "cookie") {
+      document.getElementById("s-zap-session").value = "header";
+      ptZapSessionFields();
+    }
+  };
   window.ptStartScan = async (target_id) => {
     const scan_type = document.getElementById("s-type").value;
     const body = { target_id, scan_type };
@@ -283,6 +307,7 @@
       }
     }
     if (scan_type === "zap_passive" || scan_type === "zap_active") {
+      body.zap_ajax_spider = document.getElementById("s-zap-ajax").checked;
       const zu = document.getElementById("s-zap-user").value.trim();
       if (zu) {  // authenticated scan requested
         const at = document.getElementById("s-zap-authtype").value;
@@ -299,6 +324,9 @@
         body.zap_extra_post_data = document.getElementById("s-zap-extra").value.trim() || null;
         body.zap_logged_in_regex = document.getElementById("s-zap-inregex").value.trim() || null;
         body.zap_logged_out_regex = document.getElementById("s-zap-outregex").value.trim() || null;
+        body.zap_session = document.getElementById("s-zap-session").value;
+        body.zap_token_field = document.getElementById("s-zap-tokenfield").value.trim() || "token";
+        body.zap_session_headers = document.getElementById("s-zap-sessionhdr").value.trim() || null;
       }
     }
     try {
@@ -537,7 +565,12 @@
   // ---------- CVEs ----------
   async function renderCves() {
     view.innerHTML = `<div class="page-head"><h1>CVE Database</h1>
-      <button class="btn btn-primary admin-only" onclick="ptImportFeeds()">⬆ Import NVD feeds</button></div>`
+      <div class="pill-row">
+        <button class="btn" onclick="ptExportCveDb()">⬇ Download CVE DB</button>
+        <button class="btn admin-only" onclick="document.getElementById('cve-upload-file').click()">⬆ Upload CVE DB</button>
+        <button class="btn btn-primary admin-only" onclick="ptImportFeeds()">⬆ Import NVD feeds</button>
+        <input type="file" id="cve-upload-file" accept=".json,.gz,.json.gz,.json.xz" style="display:none" onchange="ptUploadCveDb(this)">
+      </div></div>`
       + `<div class="toolbar">
           <input id="cve-q" placeholder="Search CVE id, description, product…" style="min-width:280px">
           <select id="cve-sev">
@@ -656,6 +689,25 @@
     try {
       const r = await API.post("/api/cves/import");
       toast(r.message);
+      renderCves();
+    } catch (ex) { toast(ex.message, "err"); }
+  };
+  window.ptExportCveDb = () => {
+    const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+    toast("Preparing CVE database export… (large databases take a moment)");
+    API.download("/api/cves/export", `threatprobe-cve-db-${stamp}.json.gz`)
+      .catch((ex) => toast(ex.message, "err"));
+  };
+  window.ptUploadCveDb = async (input) => {
+    const f = input.files && input.files[0];
+    input.value = "";  // allow re-selecting the same file later
+    if (!f) return;
+    toast(`Uploading ${f.name} … importing on the server may take a while`);
+    try {
+      const fd = new FormData();
+      fd.append("file", f);
+      const r = await API.postForm("/api/cves/upload", fd);
+      toast(r.message || "CVE database imported");
       renderCves();
     } catch (ex) { toast(ex.message, "err"); }
   };

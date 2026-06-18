@@ -42,6 +42,17 @@ class Settings(BaseSettings):
     # Scope bounds — keep the crawl/scan finite so memory stays bounded on real sites.
     zap_spider_max_depth: int = 5
     zap_spider_max_children: int = 12
+    # AJAX (browser-driven) spider — needed to crawl JavaScript/SPA apps whose routes
+    # and API calls the traditional spider can't see. Launches a headless browser, so
+    # it is heavier; keep it bounded. Enabled per-scan from the UI.
+    zap_ajax_max_minutes: int = 5
+    zap_ajax_max_crawl_depth: int = 10
+    zap_ajax_browser: str = "firefox-headless"
+    # ZAP defaults the AJAX spider to one browser PER CPU CORE (e.g. 16), which blows
+    # the container's memory and crashes ZAP when those browsers are torn down. Pin it
+    # low so memory stays bounded. Bump only if the ZAP container has lots of RAM.
+    zap_ajax_browsers: int = 1
+    zap_ajax_max_crawl_states: int = 50   # 0 = unlimited; bound it so big sites stay finite
 
 
 settings = Settings()

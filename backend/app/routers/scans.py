@@ -13,7 +13,7 @@ from ..schemas import (
     ScanOut,
 )
 from ..services.credentialed import start_credentialed_scan
-from ..services.zap_runner import start_zap_auth_scan
+from ..services.zap_runner import start_zap_bg_scan
 from ..services.zap_scanner import ZapAuth
 
 router = APIRouter(prefix="/api/scans", tags=["scans"])
@@ -65,26 +65,34 @@ def create_scan(payload: ScanCreate, db: Session = Depends(get_db),
         )
         return scan
 
-    # Authenticated ZAP scans run in the backend (like credentialed SSH) so the
-    # supplied web-app login credentials are never written to the database.
-    if payload.scan_type in ("zap_passive", "zap_active") and payload.zap_username:
-        auth = ZapAuth(
-            auth_type=(payload.zap_auth_type or "form").lower(),
-            username=payload.zap_username,
-            password=payload.zap_password or "",
-            login_url=payload.zap_login_url or "",
-            username_field=payload.zap_username_field or "username",
-            password_field=payload.zap_password_field or "password",
-            extra_post_data=payload.zap_extra_post_data or "",
-            logged_in_regex=payload.zap_logged_in_regex or "",
-            logged_out_regex=payload.zap_logged_out_regex or "",
-        )
-        if not auth.configured():
-            raise HTTPException(
-                status_code=400,
-                detail="Authenticated ZAP scans require a username, and (for form/json "
-                       "auth) a login URL.",
+    # ZAP scans that need authentication and/or the browser-driven AJAX spider run in
+    # the backend (like credentialed SSH) so any supplied web-app login credentials are
+    # never written to the database. Plain unauthenticated, non-AJAX scans fall through
+    # to the DB worker below.
+    if payload.scan_type in ("zap_passive", "zap_active") and (
+            payload.zap_username or payload.zap_ajax_spider):
+        auth = None
+        if payload.zap_username:
+            auth = ZapAuth(
+                auth_type=(payload.zap_auth_type or "form").lower(),
+                username=payload.zap_username,
+                password=payload.zap_password or "",
+                login_url=payload.zap_login_url or "",
+                username_field=payload.zap_username_field or "username",
+                password_field=payload.zap_password_field or "password",
+                extra_post_data=payload.zap_extra_post_data or "",
+                logged_in_regex=payload.zap_logged_in_regex or "",
+                logged_out_regex=payload.zap_logged_out_regex or "",
+                session=(payload.zap_session or "cookie").lower(),
+                token_field=payload.zap_token_field or "token",
+                session_headers=payload.zap_session_headers or "",
             )
+            if not auth.configured():
+                raise HTTPException(
+                    status_code=400,
+                    detail="Authenticated ZAP scans require a username, and (for form/json "
+                           "auth) a login URL.",
+                )
         scan = Scan(
             target_id=target.id, scan_type=payload.scan_type,
             status="running",  # claimed immediately so the DB worker never picks it up
@@ -93,7 +101,8 @@ def create_scan(payload: ScanCreate, db: Session = Depends(get_db),
         db.add(scan)
         db.commit()
         db.refresh(scan)
-        start_zap_auth_scan(scan_id=scan.id, active=(payload.scan_type == "zap_active"), auth=auth)
+        start_zap_bg_scan(scan_id=scan.id, active=(payload.scan_type == "zap_active"),
+                          auth=auth, ajax=bool(payload.zap_ajax_spider))
         return scan
 
     scan = Scan(

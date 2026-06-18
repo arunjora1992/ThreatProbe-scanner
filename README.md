@@ -228,8 +228,8 @@ docker compose logs -f worker      # "[worker] started; ... nmap=available"
 | **Host discovery** (`discovery`)    | `-sn`                     | Ping sweep — which hosts in a range are up. |
 | **Port scan** (`port`)              | `-sT -T4 --open`          | Open ports only (no version detection). |
 | **Web / URL penetration test** (`web`) | _n/a_                  | Built-in lightweight, non-destructive checks against the target URL (see below), incl. precise software→CVE correlation. |
-| **Web app scan — ZAP passive** (`zap_passive`) | _OWASP ZAP_ | Spider/crawl + passive analysis via OWASP ZAP. Non-destructive (no attack payloads). Many more findings than the built-in scanner. Optionally **authenticated** (logs in for deeper coverage). |
-| **Web app scan — ZAP active** (`zap_active`) | _OWASP ZAP_ | Spider then **active** attack (XSS, SQLi, injection, traversal…). **Intrusive — authorized targets only.** Optionally **authenticated** (logs in for deeper coverage). |
+| **Web app scan — ZAP passive** (`zap_passive`) | _OWASP ZAP_ | Spider/crawl + passive analysis via OWASP ZAP. Non-destructive (no attack payloads). Many more findings than the built-in scanner. Optionally **authenticated** (cookie or bearer-token login) and **AJAX-spidered** (JS/SPA crawling) for deeper coverage. |
+| **Web app scan — ZAP active** (`zap_active`) | _OWASP ZAP_ | Spider then **active** attack (XSS, SQLi, injection, traversal…). **Intrusive — authorized targets only.** Optionally **authenticated** (cookie or bearer-token login) and **AJAX-spidered** (JS/SPA crawling) for deeper coverage. |
 | **Custom** (`custom`)               | operator-supplied         | Any nmap flags you provide, e.g. `-sT -sV -p 1-1000 --script vuln`. |
 
 ### Web application scanning — built-in vs OWASP ZAP
@@ -264,18 +264,42 @@ scan** section and provide:
   `http` (HTTP Basic / NTLM).
 - **Username / password**, and (for form/json) the **login URL** the credentials are
   POSTed to plus the **field names** for the username and password.
+- **Session handling** — how the app keeps you logged in:
+  - **Cookie session** (default) — traditional server-rendered apps that set a session
+    cookie.
+  - **Bearer token in header** — SPAs / APIs that return a token in the login JSON and
+    replay it as `Authorization: Bearer <token>`. Give the **token field** in the login
+    response (e.g. `token`, `access_token`, `data.token`) and ZAP extracts it
+    (`{%json:<field>%}`) and re-sends it on every request. Without this, a token-based
+    login "succeeds" but the session is immediately lost and the scan stays shallow.
 - *(Optional)* **extra login params** (e.g. a CSRF token / submit button), and
   **logged-in / logged-out indicator** regexes so ZAP can detect session expiry and
   re-authenticate mid-scan (e.g. logged-in `\bLogout\b`).
 
 Under the hood the platform creates a ZAP context, configures the chosen authentication
-method, registers a user with the supplied credentials, and runs the spider + active
-scan **as that user** (`scanAsUser`). Leaving the username blank runs the normal
-anonymous scan.
+and session-management methods, registers a user with the supplied credentials, and runs
+the spider + active scan **as that user** (`scanAsUser`). Leaving the username blank runs
+the normal anonymous scan.
 
 Like credentialed Linux scans, **authenticated ZAP scans run inside the backend** (not
 the DB worker) so the login credentials are held **in memory only and never written to
 the database or logs**; they start immediately rather than queueing.
+
+#### AJAX spider (JavaScript / SPA crawling)
+
+The traditional spider only parses static HTML, so it can't see the routes or API calls
+of a JavaScript app (Angular / React / Vue) — it finds the page shell and little else.
+Tick **Use AJAX spider** in the launch dialog to run ZAP's browser-driven crawl
+(headless Firefox, bundled in the ZAP image) after the normal spider; it executes the
+app's JavaScript to discover client-side routes and the API endpoints behind them. It
+works with or without authentication, and obeys the same scope bounds.
+
+> The AJAX spider launches a real browser, so it is heavier. The platform pins it to a
+> **single browser instance** (ZAP otherwise defaults to one per CPU core, which
+> exhausts memory and crashes the daemon), and the `zap` service is given a larger
+> `/dev/shm` and a relaxed seccomp profile in `docker-compose.yml` so the browser runs
+> stably in a container. Crawl duration, depth, state count and browser count are tunable
+> via the `ZAP_AJAX_*` settings.
 
 ### Credentialed Linux assessment (authenticated package VA)
 
@@ -365,8 +389,28 @@ out of the box. For full coverage, import NVD feeds offline:
    `POST /api/cves/import`.
 
 **Supported formats:** NVD **1.1** legacy feeds (`CVE_Items`), NVD **2.0** API exports
-(`vulnerabilities`), and gzip-compressed variants. Re-importing **updates** existing
-records. Imports are batched for bounded memory on large feeds.
+(`vulnerabilities`), the fkie-cad mirror (`cve_items`), this platform's own
+**CVE DB export** (see below), and gzip/xz-compressed variants. Re-importing **updates**
+existing records. Imports are batched for bounded memory on large feeds.
+
+### Copying the CVE database to another deployment (export / upload)
+
+A second deployment that can't reach NVD doesn't need to re-download or re-parse the
+year feeds — copy the **already-built** database straight across:
+
+1. On a deployment that has the CVEs loaded: **CVE Database → ⬇ Download CVE DB** (or
+   `GET /api/cves/export`). This streams the entire CVE table as a single gzipped JSON
+   file (`threatprobe-cve-db-YYYYMMDD.json.gz`, ~50 MB for the full NVD set). The export
+   streams row-by-row, so it works on the full multi-hundred-thousand-row database
+   without spiking memory.
+2. Move the file to the target host (USB, internal share, etc.).
+3. On the target: **CVE Database → ⬆ Upload CVE DB** (admin) and pick the file (or
+   `POST /api/cves/upload`, or just drop it in `data/cve_feeds/` and run Import). The
+   upload is streamed to disk and imported with the same batched upsert — new CVEs are
+   inserted, existing ones updated.
+
+This is the simplest way to seed an air-gapped install: the heavy NVD parsing was done
+once on the source side, so the target just loads finished records.
 
 For each CVE the importer stores: ID, description, CVSS v3/v2 score and vector,
 derived severity, affected product CPEs, **structured affected version ranges**
@@ -543,25 +587,84 @@ Set in `.env` (consumed by `docker-compose.yml`) or directly in the environment.
 
 ## Air-gapped deployment
 
-Build the images where you have internet access, then move them:
+Nothing in the platform reaches the internet at runtime, so a fully offline install
+is just two transfers: **(1) the container images** and **(2) the CVE data** (either an
+exported database or the NVD feeds). Do the internet-dependent steps once on a connected
+machine, copy the artifacts across on removable media, and load them on the air-gapped
+host.
+
+### 1. Save the container images (on a connected machine)
+
+Build the two app images and pull the two third-party base images, then `docker save`
+**all four** into one tarball:
 
 ```bash
-# On a connected build machine:
-docker compose build
+# In the project directory, with internet access:
+docker compose build                       # builds pentest-platform-backend & -frontend
+docker compose pull db zap                 # pulls postgres:16-alpine & the ZAP daemon image
+
 docker save \
   pentest-platform-backend \
   pentest-platform-frontend \
   postgres:16-alpine \
-  > pentest-images.tar
-
-# Transfer pentest-images.tar AND the project directory (for compose + ./data) to the
-# air-gapped host, then:
-docker load -i pentest-images.tar
-docker compose up -d        # uses the loaded images; no pulls needed
+  ghcr.io/zaproxy/zaproxy:stable \
+  -o pentest-images.tar                     # ~1.5–2 GB (ZAP + browser bundle is the bulk)
 ```
 
-(`backend` and `worker` share the same image, so two `save` entries cover all four
-services.) Bring NVD feeds across on the same media and import them via the GUI.
+> `backend` and `worker` share the **same** image, so the three `compose` services
+> `backend`/`worker`/`frontend` need only two built images. **Do not omit the ZAP image**
+> — it ships the bundled headless Firefox the AJAX spider needs, so authenticated/SPA
+> scanning works offline once it's loaded.
+
+### 2. Get the CVE data (on the same connected machine)
+
+You have two options — pick whichever fits:
+
+**(a) Easiest — export an already-loaded database.** If you have another deployment with
+CVEs loaded, use **CVE Database → ⬇ Download CVE DB** (or `GET /api/cves/export`) to get a
+single `threatprobe-cve-db-*.json.gz` (~50 MB). On the air-gapped host, load it later with
+**⬆ Upload CVE DB**. No NVD download or re-parsing needed — see
+[Copying the CVE database](#copying-the-cve-database-to-another-deployment-export--upload).
+
+**(b) From NVD directly** — grab the JSON feeds (one `.json.gz` per year, no need to unzip):
+
+```bash
+mkdir -p data/cve_feeds
+for y in $(seq 2016 2026); do
+  curl -L -o data/cve_feeds/nvdcve-1.1-$y.json.gz \
+    https://nvd.nist.gov/feeds/json/cve/1.1/nvdcve-1.1-$y.json.gz
+done
+```
+
+### 3. Transfer & load (on the air-gapped host)
+
+Copy three things onto the offline host: **`pentest-images.tar`**, the **project
+directory** (for `docker-compose.yml` + `.env`), and the **`data/cve_feeds/`** files.
+
+```bash
+docker load -i pentest-images.tar      # registers the images locally; no registry pulls
+docker compose up -d                   # starts all 5 services from the loaded images
+```
+
+Then load the CVEs (one-time, and after each refresh) — matching how you obtained them
+in step 2:
+
+- **If you exported a CVE DB (2a):** log in as admin → **CVE Database → ⬆ Upload CVE DB**
+  and select the `threatprobe-cve-db-*.json.gz` file (or `POST /api/cves/upload`).
+- **If you copied NVD feeds (2b):** **CVE Database → Import NVD feeds**, or
+  `POST /api/cves/import` (admin token).
+
+The `./data/cve_feeds` directory is mounted into both `backend` and `worker` at
+`/data/cve_feeds`, so the importer reads it directly — see
+[The local CVE database](#the-local-cve-database-offline-import) for formats and the
+**Scheduled CVE updates** option (point it at `feed_dir` to re-import the offline feeds
+on a timer, never the network).
+
+### Keeping an air-gapped install current
+
+Repeat steps 1–3 with newer artifacts: rebuild/save images when the app changes, and
+re-download the NVD year files (the current year's file updates daily) to re-import.
+Nothing else phones home.
 
 ---
 
