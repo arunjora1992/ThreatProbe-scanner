@@ -470,7 +470,7 @@
         <h3 class="section-title">Live scan log <span id="log-live"></span></h3>
         <pre id="scan-console" class="console"></pre>
         ${showHosts ? `
-        <h3 class="section-title">Discovered hosts &amp; open ports (${openPortCount})</h3>
+        <h3 class="section-title">Discovered hosts &amp; open ports (${scan.hosts.length} host${scan.hosts.length === 1 ? "" : "s"}${scan.scan_type !== "discovery" ? `, ${openPortCount} open port${openPortCount === 1 ? "" : "s"}` : ""})</h3>
         <div class="table-wrap"><table class="fixed">
           <colgroup><col style="width:26%"><col style="width:13%"><col style="width:10%"><col style="width:19%"><col style="width:32%"></colgroup>
           <thead><tr><th>Host</th><th>Port</th><th>State</th><th>Service</th><th>Product / version</th></tr></thead>
