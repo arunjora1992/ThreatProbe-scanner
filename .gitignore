@@ -9,3 +9,6 @@ __pycache__/
 
 # Local marketing/draft content — not part of the application
 LINKEDIN_POST.md
+*.swp
+*.swo
+*~
