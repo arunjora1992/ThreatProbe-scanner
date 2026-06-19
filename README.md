@@ -710,3 +710,7 @@ This tool is for **authorized** security testing only. Scan and test **only** sy
 you own or have **explicit written permission** to assess. The web checks are
 non-destructive (no exploitation or injection payloads are sent), but you remain fully
 responsible for operating within your rules of engagement and applicable law.
+
+---
+
+© 2026 ThreatProbe Scanner. All rights reserved.
