@@ -108,8 +108,10 @@ def _normalize_url(raw: str) -> str:
 def _api(path: str, params: dict = None, timeout: int = 60, retries: int = 4):
     """Call a ZAP JSON API endpoint and return the parsed dict.
 
-    Retries briefly on connection errors so a transient ZAP hiccup/restart (e.g. while
-    the AJAX spider's browser is starting) doesn't hard-fail the whole scan.
+    Retries only on genuinely transient failures — a connection error or a 5xx (e.g. ZAP
+    restarting while the AJAX browser starts). A 4xx is a deterministic client error
+    (bad/expired scanId, unsupported param) and is raised immediately: retrying it just
+    wastes time and previously turned a single bad request into a hard scan failure.
     """
     params = dict(params or {})
     if settings.zap_api_key:
@@ -123,9 +125,14 @@ def _api(path: str, params: dict = None, timeout: int = 60, retries: int = 4):
         try:
             with urllib.request.urlopen(url, timeout=timeout) as resp:
                 return json.loads(resp.read().decode("utf-8", errors="replace"))
+        except urllib.error.HTTPError as exc:
+            if 400 <= exc.code < 500:
+                raise  # deterministic — don't retry
+            last_exc = exc
+            time.sleep(min(2 + attempt * 2, 8))  # transient 5xx — back off and retry
         except (urllib.error.URLError, ConnectionError, OSError) as exc:
             last_exc = exc
-            time.sleep(min(2 + attempt * 2, 8))  # back off while ZAP comes back up
+            time.sleep(min(2 + attempt * 2, 8))  # ZAP unreachable — back off and retry
     raise last_exc
 
 
@@ -252,15 +259,36 @@ def _setup_auth(url: str, auth: "ZapAuth", log) -> Optional[tuple]:
         return None
 
 
+def _valid_id(v) -> Optional[str]:
+    """ZAP scan-start actions return the new scan id as a numeric string ("0", "1", …).
+    Anything non-numeric (None, an error code) means the scan never started — return None
+    so callers don't poll status with a bogus id (which ZAP rejects with HTTP 400)."""
+    try:
+        return str(int(str(v)))
+    except (TypeError, ValueError):
+        return None
+
+
 def _spider(url: str, deadline: float, ctx: Optional[tuple] = None) -> int:
+    scan_id = None
     if ctx:
-        scan_id = _api("/JSON/spider/action/scanAsUser/",
-                       {"contextId": ctx[0], "userId": ctx[1], "url": url, "recurse": "true",
-                        "maxChildren": str(settings.zap_spider_max_children)}).get("scanAsUser")
-    else:
-        scan_id = _api("/JSON/spider/action/scan/",
-                       {"url": url, "recurse": "true",
-                        "maxChildren": str(settings.zap_spider_max_children)}).get("scan")
+        try:
+            scan_id = _valid_id(_api("/JSON/spider/action/scanAsUser/",
+                {"contextId": ctx[0], "userId": ctx[1], "url": url, "recurse": "true",
+                 "maxChildren": str(settings.zap_spider_max_children)}).get("scanAsUser"))
+        except Exception:
+            scan_id = None
+    if scan_id is None:
+        # No context, or scanAsUser was rejected — fall back to a plain spider. When a
+        # context/user exists, forced-user mode (set in _setup_auth) keeps it authenticated.
+        try:
+            scan_id = _valid_id(_api("/JSON/spider/action/scan/",
+                {"url": url, "recurse": "true",
+                 "maxChildren": str(settings.zap_spider_max_children)}).get("scan"))
+        except Exception:
+            return 0
+    if scan_id is None:
+        return 0
     while time.time() < deadline:
         status = _api("/JSON/spider/view/status/", {"scanId": scan_id}).get("status", "0")
         if status == "100":
@@ -295,10 +323,13 @@ def _ajax_spider(url: str, deadline: float, ctx: Optional[tuple] = None) -> int:
             pass  # option names vary slightly by version; best-effort
     try:
         if ctx:
-            # AJAX spider addresses the context/user by NAME (not id).
-            _api("/JSON/ajaxSpider/action/scanAsUser/",
-                 {"contextName": _CONTEXT_NAME, "userName": _USER_NAME,
-                  "url": url, "subtreeOnly": "false"}, timeout=60)
+            # ZAP's ajaxSpider/scanAsUser hits a stricter context check (AjaxSpiderTarget)
+            # that rejects the start URI on many SPAs. Instead run the plain scan scoped to
+            # the context — forced-user mode (set in _setup_auth) makes it crawl AS the
+            # authenticated user, which sidesteps that rejection.
+            _api("/JSON/ajaxSpider/action/scan/",
+                 {"url": url, "inScope": "true", "subtreeOnly": "false",
+                  "contextName": _CONTEXT_NAME}, timeout=60)
         else:
             _api("/JSON/ajaxSpider/action/scan/",
                  {"url": url, "inScope": "false", "subtreeOnly": "false"}, timeout=60)
@@ -343,17 +374,38 @@ def _wait_passive(deadline: float):
         time.sleep(2)
 
 
-def _active(url: str, deadline: float, ctx: Optional[tuple] = None):
+def _active(url: str, deadline: float, ctx: Optional[tuple] = None, on_poll=None):
+    scan_id = None
     if ctx:
-        scan_id = _api("/JSON/ascan/action/scanAsUser/",
-                       {"contextId": ctx[0], "userId": ctx[1], "url": url, "recurse": "true"},
-                       timeout=60).get("scanAsUser")
-    else:
-        scan_id = _api("/JSON/ascan/action/scan/",
-                       {"url": url, "recurse": "true", "inScopeOnly": "false"},
-                       timeout=60).get("scan")
+        try:
+            scan_id = _valid_id(_api("/JSON/ascan/action/scanAsUser/",
+                {"contextId": ctx[0], "userId": ctx[1], "url": url, "recurse": "true"},
+                timeout=60).get("scanAsUser"))
+        except Exception:
+            scan_id = None
+    if scan_id is None:
+        # No context, or scanAsUser didn't return a usable scan id — run a plain active
+        # scan (authenticated via forced-user mode when a context/user is configured).
+        try:
+            scan_id = _valid_id(_api("/JSON/ascan/action/scan/",
+                {"url": url, "recurse": "true", "inScopeOnly": "false"},
+                timeout=60).get("scan"))
+        except Exception:
+            return
+    if scan_id is None:
+        return  # could not start an active scan — skip rather than poll a bogus id
     while time.time() < deadline:
-        status = _api("/JSON/ascan/view/status/", {"scanId": scan_id}).get("status", "0")
+        try:
+            status = _api("/JSON/ascan/view/status/", {"scanId": scan_id}).get("status", "0")
+        except Exception:
+            return  # scan vanished (e.g. session reset) — stop polling cleanly
+        # Harvest alerts as they accrue so findings survive a late ZAP restart that would
+        # otherwise wipe the in-memory session before final collection.
+        if on_poll:
+            try:
+                on_poll()
+            except Exception:
+                pass
         if status == "100":
             break
         time.sleep(5)
@@ -426,6 +478,13 @@ def run_zap_scan(target_url: str, active: bool = False, log_cb=None,
         _api("/JSON/core/action/newSession/", {"name": "scan", "overwrite": "true"}, timeout=60)
     except Exception:
         pass
+    # Clear any forced-user mode left enabled by a previous authenticated scan, so an
+    # unauthenticated scan doesn't inherit a now-dangling forced user. _setup_auth re-enables
+    # it when this scan supplies credentials.
+    try:
+        _api("/JSON/forcedUser/action/setForcedUserModeEnabled/", {"boolean": "false"})
+    except Exception:
+        pass
     _set_scope_limits()
     _log(f"Scope bounded: spider depth≤{settings.zap_spider_max_depth}, "
          f"≤{settings.zap_spider_max_children} children/node, active ≤{settings.zap_active_max_minutes} min")
@@ -458,26 +517,48 @@ def run_zap_scan(target_url: str, active: bool = False, log_cb=None,
         _log(f"AJAX spider done: {ajax_found} URL(s) in the crawl. Draining passive scan…")
         _wait_passive(time.time() + 120)
 
+    # Collapse ZAP's per-URL instances into one finding per (alert type, severity),
+    # recording how many URLs were affected. Built incrementally so a late ZAP restart
+    # (which wipes the in-memory session) doesn't cost us everything found so far.
+    seen = {}
+
+    def _harvest():
+        for a in _collect_alerts(url):
+            f = _map_alert(a)
+            key = (f["name"], f["severity"])
+            if key in seen:
+                seen[key]["count"] += 1
+            else:
+                f["count"] = 1
+                seen[key] = f
+
     if active:
         _log(f"Active scan started (intrusive; max {settings.zap_active_max_minutes} min"
              f"{', authenticated' if ctx else ''})…")
         active_deadline = time.time() + settings.zap_active_max_minutes * 60
-        _active(url, active_deadline, ctx)
+        # Re-harvest each poll: alert counts are deduped by key, so repeated passes are safe.
+        _active(url, active_deadline, ctx,
+                on_poll=lambda: (seen.clear(), _harvest()))
         _log("Active scan complete. Draining passive scan…")
         _wait_passive(time.time() + 60)
     _log("Collecting alerts…")
+    seen.clear()
+    _harvest()
 
-    # Collapse ZAP's per-URL instances into one finding per (alert type, severity),
-    # recording how many URLs were affected.
-    seen = {}
-    for a in _collect_alerts(url):
-        f = _map_alert(a)
-        key = (f["name"], f["severity"])
-        if key in seen:
-            seen[key]["count"] += 1
-            continue
-        f["count"] = 1
-        seen[key] = f
+    # Session-loss guard: if the crawl found URLs but ZAP now has no recorded sites and we
+    # collected nothing, the daemon restarted mid-scan and lost everything — fail loudly
+    # rather than reporting a misleading "completed, 0 findings".
+    if result.urls_found > 0 and not seen:
+        try:
+            sites = _api("/JSON/core/view/sites/").get("sites", [])
+        except Exception:
+            sites = []
+        if not sites:
+            raise RuntimeError(
+                "ZAP restarted during the scan and lost its session, so results are "
+                "incomplete. This is usually resource pressure during the active/AJAX "
+                "phase — re-run the scan (or run passive/without the AJAX spider).")
+
     for f in seen.values():
         if f["count"] > 1:
             f["description"] = f"{f['description']}\n(Affected {f['count']} URLs/instances.)"
