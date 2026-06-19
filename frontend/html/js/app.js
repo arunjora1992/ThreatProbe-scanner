@@ -419,6 +419,33 @@
         </tr>`).join("") ||
         `<tr><td colspan="4" class="empty">No web findings.</td></tr>`;
 
+      // Discovered hosts & open ports (network scans). The API returns hosts[].services[];
+      // package-audit "services" (protocol "pkg") are excluded — they have their own table.
+      const showHosts = Array.isArray(scan.hosts) && scan.hosts.length > 0
+        && scan.scan_type !== "credentialed";
+      let openPortCount = 0;
+      let hostRows = "";
+      if (showHosts) {
+        hostRows = scan.hosts.map((h) => {
+          const svcs = (h.services || []).filter((s) => s.protocol !== "pkg");
+          const hostCell = `${esc(h.address)}${h.hostname ? ` <span class="muted small">(${esc(h.hostname)})</span>` : ""}${h.os_guess ? `<br><span class="muted small">${esc(h.os_guess)}</span>` : ""}`;
+          if (!svcs.length) {
+            return `<tr><td>${hostCell}</td><td colspan="4" class="muted small">host up — no open ports detected</td></tr>`;
+          }
+          return svcs.map((s, i) => {
+            openPortCount++;
+            const ver = [s.product, s.version].filter(Boolean).join(" ") || s.banner || "—";
+            return `<tr>
+              <td>${i === 0 ? hostCell : ""}</td>
+              <td class="mono nowrap">${s.port}/${esc(s.protocol)}</td>
+              <td>${esc(s.state)}</td>
+              <td>${esc(s.service_name || "—")}</td>
+              <td class="small">${esc(ver)}</td>
+            </tr>`;
+          }).join("");
+        }).join("");
+      }
+
       view.innerHTML = `
         <div class="page-head">
           <h1>Scan #${scan.id} <span class="muted" style="font-size:14px">${esc(scan.scan_type)}</span></h1>
@@ -442,6 +469,12 @@
         </div>
         <h3 class="section-title">Live scan log <span id="log-live"></span></h3>
         <pre id="scan-console" class="console"></pre>
+        ${showHosts ? `
+        <h3 class="section-title">Discovered hosts &amp; open ports (${openPortCount})</h3>
+        <div class="table-wrap"><table class="fixed">
+          <colgroup><col style="width:26%"><col style="width:13%"><col style="width:10%"><col style="width:19%"><col style="width:32%"></colgroup>
+          <thead><tr><th>Host</th><th>Port</th><th>State</th><th>Service</th><th>Product / version</th></tr></thead>
+          <tbody>${hostRows || `<tr><td colspan="5" class="empty">No hosts up.</td></tr>`}</tbody></table></div>` : ""}
         <h3 class="section-title">CVE findings (${findings.length})</h3>
         ${findings.length > FIND_CAP ? `<p class="muted small">Showing first ${FIND_CAP}. Use the Reports page or CSV export for the full set.</p>` : ""}
         <div class="table-wrap"><table class="fixed">
