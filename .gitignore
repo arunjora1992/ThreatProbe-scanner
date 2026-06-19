@@ -6,3 +6,6 @@ data/cve_feeds/_auto/
 __pycache__/
 *.pyc
 .DS_Store
+
+# Local marketing/draft content — not part of the application
+LINKEDIN_POST.md
