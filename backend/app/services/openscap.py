@@ -62,7 +62,13 @@ def find_datastream(ex: Callable[[str], str], os_id: str, version_id: str) -> st
     if oid and major:
         keys += [f"{oid}{major}", f"{oid}{compact}"]
     if rhel_family and major:
-        keys += [f"rhel{major}", f"cs{major}", f"centos{major}", f"ol{major}"]
+        # Prefer clone-specific content (its CPE matches the host) BEFORE the rhel
+        # datastream — running rhel content on a clone marks every rule notapplicable.
+        if oid == "centos":
+            keys += [f"cs{major}", f"centos{major}"]
+        if oid in ("ol", "oraclelinux"):
+            keys += [f"ol{major}", f"oracle{major}"]
+        keys += [f"rhel{major}"]  # fallback last
     keys = [k for k in dict.fromkeys(keys) if k]  # de-dup, preserve order
     best, best_score = "", -1
     for f in files:
@@ -206,22 +212,40 @@ def run(ex: Callable[[str], str], os_id: str, version_id: str,
         _log(f"OpenSCAP: {reason}")
         return OpenScapResult(available=False, reason=reason)
     score, results = parse_results(xml_text)
+    if not results and xml_text.count("rule-result"):
+        # ET found nothing but the doc has rule-results — recover via regex (namespace-proof).
+        results = _parse_results_regex(xml_text)
+        score = score if score is not None else _score_regex(xml_text)
     if not results:
-        # ET found no rule-results. If the raw doc actually contains them it's a
-        # parser/namespace issue — recover with a regex fallback; otherwise oscap errored
-        # (surface its stderr + the raw rule-result count to diagnose).
-        rr_count = xml_text.count("rule-result")
-        if rr_count:
-            results = _parse_results_regex(xml_text)
-            score = score if score is not None else _score_regex(xml_text)
-        if not results:
-            reason = (f"oscap ran but no rule outcomes parsed (rule-result tags in file: "
-                      f"{rr_count}; results bytes: {len(xml_text)})"
-                      + (f"; stderr: {err.strip()[:300]}" if err.strip() else ""))
-            _log(f"OpenSCAP: {reason}")
-            return OpenScapResult(available=False, reason=reason)
+        # No pass/fail/error outcomes. Tally the raw result values to explain why — the
+        # common cause is platform/CPE mismatch (every rule 'notapplicable'), e.g. running
+        # the RHEL datastream on a RHEL clone whose /etc/redhat-release isn't recognized.
+        tally = _result_tally(xml_text)
+        na = tally.get("notapplicable", 0)
+        if na and na >= max(tally.values()):
+            reason = (f"oscap ran but every rule was 'notapplicable' ({na}) — the SSG "
+                      f"datastream's platform/CPE did not match this host. If this is a "
+                      f"RHEL clone (CentOS Stream/Rocky/Alma), install that distro's own "
+                      f"scap-security-guide content (or a matching ssg-*-ds.xml).")
+        else:
+            reason = ("oscap produced no pass/fail outcomes (result tally: "
+                      + ", ".join(f"{k}={v}" for k, v in sorted(tally.items())) + ")"
+                      + (f"; stderr: {err.strip()[:200]}" if err.strip() else ""))
+        _log(f"OpenSCAP: {reason}")
+        return OpenScapResult(available=False, reason=reason)
     return OpenScapResult(available=True, profile=profile, datastream=ds.rsplit("/", 1)[-1],
                           score=score, results=results)
+
+
+def _result_tally(xml_text: str) -> dict:
+    """Count XCCDF rule-result outcomes by value (pass/fail/notapplicable/…) from raw XML."""
+    tally = {}
+    for m in re.finditer(r"<[\w.:-]*result\b[^>]*>\s*([a-z]+)", xml_text):
+        v = m.group(1).strip().lower()
+        if v in ("pass", "fail", "error", "unknown", "notapplicable", "notchecked",
+                 "notselected", "informational", "fixed"):
+            tally[v] = tally.get(v, 0) + 1
+    return tally
 
 
 def _parse_results_regex(xml_text: str) -> List[HardeningResult]:
