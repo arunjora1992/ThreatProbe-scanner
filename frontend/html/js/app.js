@@ -158,30 +158,60 @@
     try {
       const s = await API.get("/api/dashboard/stats");
       const sev = s.severity_breakdown || {};
-      const sevColors = { CRITICAL: "var(--crit)", HIGH: "var(--high)", MEDIUM: "var(--med)", LOW: "var(--low)", INFO: "var(--info)", NONE: "var(--info)", UNKNOWN: "var(--info)" };
-      const sevTotal = Object.values(sev).reduce((a, b) => a + b, 0) || 1;
-      const bar = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO", "UNKNOWN"]
-        .filter((k) => sev[k])
-        .map((k) => `<div style="background:${sevColors[k]};flex:${sev[k]}" title="${k}: ${sev[k]}">${sev[k]}</div>`)
-        .join("") || `<div style="background:var(--info);flex:1">No findings yet</div>`;
+      const order = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"];
+      const segs = order.map((k) => ({ label: k, value: sev[k] || 0, color: SEV_COLOR[k] }));
+      const sevTotal = segs.reduce((a, x) => a + x.value, 0);
 
-      const cards = [
-        ["Targets", s.targets], ["Scans", s.scans], ["Hosts discovered", s.hosts],
-        ["CVEs in DB", s.cves], ["Total findings", s.findings_total],
-      ].map(([l, n]) => `<div class="card stat-card"><div class="stat-num">${n}</div><div class="stat-label">${l}</div></div>`).join("");
+      // Stat cards — KEV and Critical/High get accent treatment.
+      const cardDefs = [
+        ["Targets", s.targets, ""], ["Scans", s.scans, ""],
+        ["Hosts", s.hosts, ""], ["CVEs in DB", (s.cves || 0).toLocaleString(), ""],
+        ["Open Crit/High", s.crit_high_open ?? 0, "crit"],
+        ["Exploited (KEV)", s.kev_findings ?? 0, "kev"],
+      ];
+      const cards = cardDefs.map(([l, n, cls]) =>
+        `<div class="card stat-card ${cls === "kev" ? "stat-kev" : cls === "crit" ? "stat-crit" : ""}">
+          <div class="stat-num">${n}</div><div class="stat-label">${l}</div></div>`).join("");
+
+      // Scan-status breakdown bars.
+      const ss = s.scan_status || {};
+      const ssColor = { completed: "var(--ok)", running: "var(--med)", queued: "var(--low)",
+                        failed: "var(--high)", cancelled: "var(--muted)" };
+      const ssItems = Object.keys(ss).sort((a, b) => ss[b] - ss[a])
+        .map((k) => ({ label: k, value: ss[k], color: ssColor[k] || "var(--info)" }));
+
+      // Top priorities (KEV / high-risk findings).
+      const topRows = (s.top_risk || []).map((f) => `
+        <tr onclick="ptViewCve('${esc(f.cve_id)}')" style="cursor:pointer">
+          <td class="mono nowrap">${esc(f.cve_id)}${f.kev ? ' <span class="sev-badge sev-critical" title="Actively exploited (CISA KEV)">KEV</span>' : ""}</td>
+          <td>${esc(f.package || "—")}</td>
+          <td>${sevBadge(f.severity)}</td>
+          <td class="nowrap small">${f.cvss ?? "—"}</td>
+          <td class="nowrap small">${f.epss != null ? (f.epss * 100).toFixed(1) + "%" : "—"}</td>
+        </tr>`).join("") || `<tr><td colspan="5" class="empty">No findings yet</td></tr>`;
 
       const recent = (s.recent_scans || []).map((sc) => `
         <tr onclick="ptOpenScan(${sc.id})" style="cursor:pointer">
           <td>#${sc.id}</td><td>${esc(sc.scan_type)}</td>
           <td>${statusBadge(sc.status)}</td><td>${sc.finding_count}</td>
-          <td>${fmtDate(sc.created_at)}</td></tr>`).join("") ||
+          <td class="small">${fmtDate(sc.created_at)}</td></tr>`).join("") ||
         `<tr><td colspan="5" class="empty">No scans yet</td></tr>`;
 
       view.innerHTML = `
         <div class="page-head"><h1>Dashboard</h1></div>
         <div class="grid stat-grid">${cards}</div>
-        <h3 class="section-title">Severity breakdown (all findings)</h3>
-        <div class="sev-bar">${bar}</div>
+        <div class="chart-row" style="margin-top:18px">
+          ${chartCard("Findings by severity",
+            sevTotal ? `<div class="donut-wrap">${svgDonut(segs, String(sevTotal), "findings")}${legend(segs)}</div>`
+                     : `<p class="muted small">No findings yet — run a scan to populate.</p>`)}
+          ${chartCard("Scans by status",
+            ssItems.length ? svgBars(ssItems) : `<p class="muted small">No scans yet.</p>`)}
+        </div>
+        <h3 class="section-title">🎯 Top priorities (exploited / high-risk)</h3>
+        <div class="table-wrap"><table class="fixed">
+          <colgroup><col style="width:24%"><col style="width:30%"><col style="width:16%"><col style="width:14%"><col style="width:16%"></colgroup>
+          <thead><tr><th>CVE</th><th>Package / service</th><th>Severity</th><th>CVSS</th><th>EPSS</th></tr></thead>
+          <tbody>${topRows}</tbody></table></div>
         <h3 class="section-title">Recent scans</h3>
         <div class="table-wrap"><table>
           <thead><tr><th>Scan</th><th>Type</th><th>Status</th><th>Findings</th><th>Created</th></tr></thead>

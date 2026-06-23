@@ -233,6 +233,10 @@ body { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; 
 .card { box-shadow: var(--shadow); transition: transform .15s, box-shadow .15s; }
 .stat-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-lg); }
 .stat-card .stat-num { background-image: var(--grad); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+.stat-card.stat-crit { border-color: var(--high); }
+.stat-card.stat-crit .stat-num { background-image: linear-gradient(135deg,#ef4444,#b91c1c); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+.stat-card.stat-kev { border-color: var(--crit); background: linear-gradient(180deg, color-mix(in srgb, var(--crit) 12%, transparent), transparent); }
+.stat-card.stat-kev .stat-num { background-image: linear-gradient(135deg,#fb7185,#be123c); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
 
 /* Tables: rounded container, gentle row hover, uppercase headers */
 .table-wrap { box-shadow: var(--shadow); }
