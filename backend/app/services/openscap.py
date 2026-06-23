@@ -31,6 +31,7 @@ class OpenScapResult:
     datastream: str = ""
     score: Optional[float] = None
     results: List[HardeningResult] = None
+    reason: str = ""           # why OpenSCAP was not used (for the scan log)
 
 
 def _localname(tag: str) -> str:
@@ -42,22 +43,39 @@ def oscap_available(ex: Callable[[str], str]) -> bool:
 
 
 def find_datastream(ex: Callable[[str], str], os_id: str, version_id: str) -> str:
-    """Pick the SSG datastream best matching the target OS, or '' if none found."""
-    listing = ex(f"ls -1 {SSG_DIR}/ssg-*-ds.xml 2>/dev/null")
+    """Pick the SSG datastream best matching the target OS, or '' if none found.
+
+    Robust to the many datastreams present on a real host and to vendor naming
+    variants (ssg-rhel9-ds.xml, ssg-centos9-ds.xml, ssg-cs9-ds.xml, …) — scores every
+    candidate by which OS key its filename contains rather than requiring an exact name.
+    """
+    listing = ex(f"ls -1 {SSG_DIR}/*-ds.xml 2>/dev/null")
     files = [ln.strip() for ln in listing.splitlines() if ln.strip().endswith("-ds.xml")]
     if not files:
         return ""
     oid = (os_id or "").lower()
     major = (version_id or "").split(".")[0]
     compact = (version_id or "").replace(".", "")
-    # RHEL-family clones map to the rhel datastream.
-    family = "rhel" if oid in ("centos", "rocky", "almalinux", "ol", "oraclelinux", "rhel") else oid
-    candidates = [f"ssg-{oid}{major}-ds.xml", f"ssg-{family}{major}-ds.xml",
-                  f"ssg-{oid}{compact}-ds.xml", f"ssg-{family}{compact}-ds.xml"]
-    for cand in candidates:
-        for f in files:
-            if f.endswith("/" + cand) or f.endswith(cand):
-                return f
+    rhel_family = oid in ("centos", "rocky", "almalinux", "alma", "ol", "oraclelinux", "rhel")
+    # Ordered preference of filename keys (most specific first).
+    keys = []
+    if oid and major:
+        keys += [f"{oid}{major}", f"{oid}{compact}"]
+    if rhel_family and major:
+        keys += [f"rhel{major}", f"cs{major}", f"centos{major}", f"ol{major}"]
+    keys = [k for k in dict.fromkeys(keys) if k]  # de-dup, preserve order
+    best, best_score = "", -1
+    for f in files:
+        base = f.rsplit("/", 1)[-1].lower()
+        score = -1
+        for i, k in enumerate(keys):
+            if k in base:
+                score = max(score, len(keys) - i)
+                break
+        if score > best_score:
+            best, best_score = f, score
+    if best_score > 0:
+        return best
     return files[0] if len(files) == 1 else ""
 
 
@@ -150,25 +168,45 @@ def parse_results(xml_text: str) -> "tuple[Optional[float], List[HardeningResult
 
 
 def run(ex: Callable[[str], str], os_id: str, version_id: str,
-        prefer_profile: str = "") -> OpenScapResult:
-    """Run the official CIS profile via oscap. Returns available=False to trigger fallback."""
+        prefer_profile: str = "", log=None) -> OpenScapResult:
+    """Run the official CIS profile via oscap. Returns available=False to trigger fallback.
+
+    `log` (optional callable) receives progress/diagnostic lines so the scan log explains
+    exactly why OpenSCAP was used or skipped.
+    """
+    def _log(m):
+        if log:
+            log(m)
+
     if not oscap_available(ex):
-        return OpenScapResult(available=False)
+        return OpenScapResult(available=False, reason="`oscap` not found in PATH on the target")
     ds = find_datastream(ex, os_id, version_id)
     if not ds:
-        return OpenScapResult(available=False)
+        listing = ex(f"ls -1 {SSG_DIR}/*-ds.xml 2>/dev/null").strip()
+        reason = (f"no SSG datastream under {SSG_DIR} matched os_id='{os_id}' "
+                  f"version='{version_id}'. Present: "
+                  + (", ".join(f.rsplit('/', 1)[-1] for f in listing.splitlines()) or "none"))
+        _log(f"OpenSCAP: {reason}")
+        return OpenScapResult(available=False, reason=reason)
+    _log(f"OpenSCAP: using datastream {ds.rsplit('/', 1)[-1]}")
     profile = find_cis_profile(ex, ds, prefer_profile)
     if not profile:
-        return OpenScapResult(available=False)
-    # eval returns 0 (all pass) or 2 (some failed) on success; both are fine.
-    ex(f"oscap xccdf eval --profile {profile} --results {_RESULTS_PATH} {ds} "
-       f">/dev/null 2>&1; true")
+        reason = f"no CIS profile found in {ds.rsplit('/', 1)[-1]} (oscap info listed none matching 'cis')"
+        _log(f"OpenSCAP: {reason}")
+        return OpenScapResult(available=False, reason=reason)
+    _log(f"OpenSCAP: evaluating profile {profile} (this can take a few minutes)…")
+    # eval returns 0 (all pass) or 2 (some failed) on success; both are fine. Capture
+    # stderr so a real error (not just 'some rules failed') can be surfaced.
+    err = ex(f"oscap xccdf eval --profile {profile} --results {_RESULTS_PATH} {ds} "
+             f">/dev/null 2>{_RESULTS_PATH}.err; cat {_RESULTS_PATH}.err 2>/dev/null | head -3")
     xml_text = ex(f"cat {_RESULTS_PATH} 2>/dev/null")
-    ex(f"rm -f {_RESULTS_PATH} 2>/dev/null; true")
+    ex(f"rm -f {_RESULTS_PATH} {_RESULTS_PATH}.err 2>/dev/null; true")
     if not xml_text.strip():
-        return OpenScapResult(available=False)
+        reason = "oscap produced no results" + (f": {err.strip()[:200]}" if err.strip() else "")
+        _log(f"OpenSCAP: {reason}")
+        return OpenScapResult(available=False, reason=reason)
     score, results = parse_results(xml_text)
     if not results:
-        return OpenScapResult(available=False)
-    return OpenScapResult(available=True, profile=profile, datastream=ds.split("/")[-1],
+        return OpenScapResult(available=False, reason="oscap results XML had no rule outcomes")
+    return OpenScapResult(available=True, profile=profile, datastream=ds.rsplit("/", 1)[-1],
                           score=score, results=results)

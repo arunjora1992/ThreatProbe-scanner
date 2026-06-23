@@ -21,7 +21,8 @@ _SEV = {"CRITICAL": 5, "HIGH": 4, "MEDIUM": 3, "LOW": 2, "INFO": 1, "NONE": 0}
 def _assess_host(db, scan, host_addr, port, username, password, key_text, key_passphrase):
     scanlog.log(db, scan, f"[{host_addr}] SSH connecting on port {port} for CIS audit…")
     cr = collect_compliance(host=host_addr, port=port, username=username,
-                            password=password, key_text=key_text, key_passphrase=key_passphrase)
+                            password=password, key_text=key_text, key_passphrase=key_passphrase,
+                            log=lambda m: scanlog.log(db, scan, f"[{host_addr}] {m}"))
     host = Host(scan_id=scan.id, address=host_addr, hostname="", state="up",
                 os_guess=f"{cr.os_name} {cr.os_version}".strip())
     db.add(host)
@@ -32,8 +33,9 @@ def _assess_host(db, scan, host_addr, port, username, password, key_text, key_pa
                               f"{cr.datastream}; {len(cr.results)} rules evaluated"
                               + (f"; compliance score {cr.score:.1f}%" if cr.score is not None else ""))
     else:
-        scanlog.log(db, scan, f"[{host_addr}] OpenSCAP/SSG not available — ran built-in "
-                              f"hardening checks ({len(cr.results)} checks).")
+        scanlog.log(db, scan, f"[{host_addr}] OpenSCAP not used — ran built-in hardening "
+                              f"checks ({len(cr.results)} checks)."
+                              + (f" Reason: {cr.reason}" if cr.reason else ""))
 
     fails = 0
     for r in cr.results:

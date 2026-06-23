@@ -42,6 +42,7 @@ class ComplianceResult:
     profile: str = ""          # CIS profile id (openscap)
     datastream: str = ""
     score: Optional[float] = None
+    reason: str = ""           # why the built-in fallback was used (if it was)
     results: List["hardening.HardeningResult"] = field(default_factory=list)
 
 
@@ -159,6 +160,7 @@ def collect_compliance(
     key_text: Optional[str] = None,
     key_passphrase: Optional[str] = None,
     prefer_profile: str = "",
+    log=None,
 ) -> ComplianceResult:
     """Run a CIS-benchmark audit over SSH: OpenSCAP if present, else built-in checks."""
     client = _connect(host, port, username, password, key_text, key_passphrase)
@@ -171,13 +173,15 @@ def collect_compliance(
             return _exec(client, cmd, timeout=timeout)
 
         # oscap eval over a full benchmark can take a few minutes — give it room.
-        scap = openscap.run(lambda c: ex(c, timeout=900), os_id, cr.os_version, prefer_profile)
+        scap = openscap.run(lambda c: ex(c, timeout=900), os_id, cr.os_version,
+                            prefer_profile, log=log)
         if scap.available:
             cr.mode = "openscap"
             cr.profile, cr.datastream, cr.score = scap.profile, scap.datastream, scap.score
             cr.results = scap.results
         else:
             cr.mode = "builtin"
+            cr.reason = scap.reason
             cr.results = hardening.run_hardening_checks(lambda c: ex(c, timeout=40))
         return cr
     finally:
