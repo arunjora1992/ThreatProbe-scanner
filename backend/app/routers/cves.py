@@ -32,6 +32,8 @@ router = APIRouter(prefix="/api/cves", tags=["cves"])
 def search_cves(
     q: str | None = Query(None, description="search id/description/product"),
     severity: str | None = None,
+    product: str | None = Query(None, description="filter by affected product/package"),
+    cwe: str | None = Query(None, description="filter by CWE id, e.g. CWE-79"),
     limit: int = Query(100, le=1000),
     offset: int = 0,
     db: Session = Depends(get_db),
@@ -47,6 +49,12 @@ def search_cves(
         ))
     if severity:
         query = query.filter(CVE.severity == severity.upper())
+    # Package/product-wise: match only the affected-product index (precise, unlike `q`).
+    if product:
+        query = query.filter(CVE.cpe_products.ilike(f"%{product}%"))
+    # Bug/vulnerability-type-wise: match the CWE id (e.g. CWE-79 = XSS).
+    if cwe:
+        query = query.filter(CVE.cwe.ilike(f"%{cwe}%"))
     return query.order_by(CVE.cvss_v3_score.desc().nullslast()).offset(offset).limit(limit).all()
 
 

@@ -606,10 +606,29 @@
         <input type="file" id="cve-upload-file" accept=".json,.gz,.json.gz,.json.xz" style="display:none" onchange="ptUploadCveDb(this)">
       </div></div>`
       + `<div class="toolbar">
-          <input id="cve-q" placeholder="Search CVE id, description, product…" style="min-width:280px">
+          <input id="cve-q" placeholder="Search CVE id, description, product…" style="min-width:240px">
+          <input id="cve-product" placeholder="Affected package / product…" style="min-width:180px">
           <select id="cve-sev">
             <option value="">All severities</option>
             <option>CRITICAL</option><option>HIGH</option><option>MEDIUM</option><option>LOW</option>
+          </select>
+          <select id="cve-cwe" title="Filter by vulnerability type (CWE)">
+            <option value="">All vulnerability types</option>
+            <option value="CWE-79">Cross-Site Scripting (XSS) · CWE-79</option>
+            <option value="CWE-89">SQL Injection · CWE-89</option>
+            <option value="CWE-78">OS Command Injection · CWE-78</option>
+            <option value="CWE-22">Path Traversal · CWE-22</option>
+            <option value="CWE-352">CSRF · CWE-352</option>
+            <option value="CWE-918">SSRF · CWE-918</option>
+            <option value="CWE-787">Out-of-bounds Write · CWE-787</option>
+            <option value="CWE-125">Out-of-bounds Read · CWE-125</option>
+            <option value="CWE-416">Use After Free · CWE-416</option>
+            <option value="CWE-190">Integer Overflow · CWE-190</option>
+            <option value="CWE-502">Deserialization · CWE-502</option>
+            <option value="CWE-434">Unrestricted File Upload · CWE-434</option>
+            <option value="CWE-287">Improper Authentication · CWE-287</option>
+            <option value="CWE-269">Improper Privilege Mgmt · CWE-269</option>
+            <option value="CWE-20">Improper Input Validation · CWE-20</option>
           </select>
           <button class="btn btn-primary" onclick="ptSearchCves()">Search</button>
           <span id="cve-count" class="muted small"></span>
@@ -620,6 +639,9 @@
       el.style.display = (API.user() || {}).role === "admin" ? "" : "none";
     });
     document.getElementById("cve-q").addEventListener("keydown", (e) => { if (e.key === "Enter") ptSearchCves(); });
+    document.getElementById("cve-product").addEventListener("keydown", (e) => { if (e.key === "Enter") ptSearchCves(); });
+    document.getElementById("cve-sev").addEventListener("change", ptSearchCves);
+    document.getElementById("cve-cwe").addEventListener("change", ptSearchCves);
     try {
       const c = await API.get("/api/cves/count");
       document.getElementById("cve-count").textContent = `${c.total} CVEs in local database`;
@@ -680,13 +702,17 @@
   };
   window.ptSearchCves = async () => {
     const q = document.getElementById("cve-q").value.trim();
+    const product = document.getElementById("cve-product").value.trim();
     const sev = document.getElementById("cve-sev").value;
+    const cwe = document.getElementById("cve-cwe").value;
     const box = document.getElementById("cve-results");
     box.innerHTML = loading();
     try {
       const params = new URLSearchParams();
       if (q) params.set("q", q);
+      if (product) params.set("product", product);
       if (sev) params.set("severity", sev);
+      if (cwe) params.set("cwe", cwe);
       params.set("limit", "200");
       const cves = await API.get("/api/cves?" + params.toString());
       const rows = cves.map((c) => `
@@ -694,10 +720,11 @@
           <td class="mono nowrap">${esc(c.cve_id)}</td>
           <td>${sevBadge(c.severity)}</td>
           <td>${c.cvss_v3_score ?? "—"}</td>
-          <td>${esc((c.description || "").slice(0, 130))}…</td></tr>`).join("") ||
-        `<tr><td colspan="4" class="empty">No matching CVEs.</td></tr>`;
+          <td class="nowrap small">${esc(c.cwe || "—")}</td>
+          <td>${esc((c.description || "").slice(0, 120))}…</td></tr>`).join("") ||
+        `<tr><td colspan="5" class="empty">No matching CVEs.</td></tr>`;
       box.innerHTML = `<div class="table-wrap"><table>
-        <thead><tr><th>CVE</th><th>Severity</th><th>CVSS</th><th>Description</th></tr></thead>
+        <thead><tr><th>CVE</th><th>Severity</th><th>CVSS</th><th>Type (CWE)</th><th>Description</th></tr></thead>
         <tbody>${rows}</tbody></table></div>`;
     } catch (ex) { box.innerHTML = errBox(ex); }
   };
