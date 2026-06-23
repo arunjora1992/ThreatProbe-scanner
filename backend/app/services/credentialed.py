@@ -21,6 +21,13 @@ from .ssh_scanner import collect_host_facts
 _SEV_WEIGHT = {"CRITICAL": 5, "HIGH": 4, "MEDIUM": 3, "LOW": 2, "NONE": 1, "UNKNOWN": 0}
 
 
+def _is_backported_pkg(name: str) -> bool:
+    """Packages whose distro build backports fixes onto an upstream base version, so
+    NVD upstream-range matching over-reports (the kernel being the prime example)."""
+    n = (name or "").lower()
+    return n == "kernel" or n.startswith(("kernel-", "linux-image", "linux-headers"))
+
+
 def _assess_host(db, scan, host_addr, port, username, password, key_text, key_passphrase):
     """SSH into one host, enumerate packages, correlate. Returns (pkg_count, vuln_count)."""
     scanlog.log(db, scan, f"[{host_addr}] SSH connecting on port {port}…")
@@ -69,6 +76,14 @@ def _assess_host(db, scan, host_addr, port, username, password, key_text, key_pa
             else:
                 remedy = (f"Upgrade '{name}' (installed {full_ver}) to the latest fixed "
                           f"release from your OS vendor (resolves {n} CVE(s)).")
+            # The kernel (and other heavily-backported packages) keeps an upstream base
+            # version while the distro backports security fixes into its release build.
+            # NVD only knows upstream ranges, so these matches can over-report — flag that.
+            if _is_backported_pkg(name):
+                remedy += (" NOTE: matched against the upstream kernel version; your "
+                           "distro may have already backported these fixes into the "
+                           f"'{full_ver}' build — verify against your vendor's security "
+                           "errata (RHEL/Debian/Ubuntu) before treating as unpatched.")
             db.add(Finding(scan_id=scan.id, service_id=svc.id, cve_id=top_cve.cve_id,
                            severity=max_sev, cvss_score=max_cvss, match_confidence="high",
                            match_reason=f"[{host_addr}] {name} {clean_ver}: {n} CVE(s); {remedy}"))

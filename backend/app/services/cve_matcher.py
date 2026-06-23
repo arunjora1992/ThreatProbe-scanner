@@ -53,6 +53,18 @@ def _parse_version(v: str) -> Optional[tuple]:
     return tuple(out) or None
 
 
+def _is_kernel_pkg(name: str) -> bool:
+    """True for the actual Linux-kernel package, which NVD lists under the product
+    `linux_kernel` ("linux kernel" normalized) but distros package under a different
+    name: `kernel`/`kernel-core`/`kernel-modules…` (RHEL/Fedora/SUSE) or
+    `linux-image-*`/`linux-headers-*` (Debian/Ubuntu). Deliberately strict so unrelated
+    `linux-*` packages (e.g. linux-sysctl-defaults, linux-firmware) are NOT mis-mapped.
+    """
+    n = _normalize(name)  # hyphens/underscores -> spaces, lowercased
+    return (n == "kernel" or n.startswith("kernel ")
+            or n.startswith("linux image") or n.startswith("linux headers"))
+
+
 def _product_tokens(service: Service) -> set:
     """Normalized product names for the service (product, CPE product, service name)."""
     tokens = set()
@@ -71,6 +83,9 @@ def _product_tokens(service: Service) -> set:
             if p:
                 tokens.add(p)
                 tokens.add(p.split()[0])
+    # Map the kernel package name to NVD's `linux_kernel` product so kernel CVEs match.
+    if _is_kernel_pkg(service.product) or _is_kernel_pkg(service.service_name):
+        tokens.add("linux kernel")
     return {t for t in tokens if len(t) >= 3}
 
 
