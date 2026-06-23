@@ -283,7 +283,14 @@
         <input id="s-custom" placeholder="-sT -sV -p 1-1000 --script vuln"></div>
       <div id="s-cred-rows" class="hidden">
         <div class="card" style="background:var(--bg-2);margin-bottom:6px">
-          <p class="small muted" id="s-cis-note" style="margin-bottom:10px;display:none">🛡 Runs the official <b>CIS benchmark via OpenSCAP</b> when the target has <code>oscap</code> + SSG content installed; otherwise falls back to built-in hardening checks. Use an account with sufficient privilege (sudo/root) for full coverage.</p>
+          <p class="small muted" id="s-cis-note" style="margin-bottom:10px;display:none">🛡 Runs the official <b>CIS benchmark via OpenSCAP</b> (auto-installed on the target if missing); otherwise falls back to built-in hardening checks. Use an account with sufficient privilege (sudo/root) for full coverage.</p>
+          <div class="form-row" id="s-cis-level-row" style="display:none"><label>CIS profile / level</label>
+            <select id="s-cis-level">
+              <option value="_cis_server_l1">Level 1 — Server (recommended)</option>
+              <option value="_cis">Level 2 — Server</option>
+              <option value="_cis_workstation_l1">Level 1 — Workstation</option>
+              <option value="_cis_workstation_l2">Level 2 — Workstation</option>
+            </select></div>
           <p class="small muted" style="margin-bottom:10px">🔐 Credentials are used in-memory for this scan only and are <b>never stored</b>. The target address is used as the SSH host.</p>
           <div class="form-row"><label>SSH username</label><input id="s-user" placeholder="e.g. ec2-user" autocomplete="off"></div>
           <div class="form-row"><label>SSH port</label><input id="s-port" type="number" value="22"></div>
@@ -331,6 +338,7 @@
     document.getElementById("s-custom-row").classList.toggle("hidden", v !== "custom");
     document.getElementById("s-cred-rows").classList.toggle("hidden", !sshScan);
     document.getElementById("s-cis-note").style.display = v === "cis_benchmark" ? "" : "none";
+    document.getElementById("s-cis-level-row").style.display = v === "cis_benchmark" ? "" : "none";
     document.getElementById("s-zap-warn").classList.toggle("hidden", v !== "zap_active");
     document.getElementById("s-zap-rows").classList.toggle(
       "hidden", v !== "zap_passive" && v !== "zap_active");
@@ -361,6 +369,7 @@
       if (!body.ssh_username || (!body.ssh_password && !body.ssh_key)) {
         toast("Username and a password or private key are required", "err"); return;
       }
+      if (scan_type === "cis_benchmark") body.cis_profile = document.getElementById("s-cis-level").value;
     }
     if (scan_type === "zap_passive" || scan_type === "zap_active") {
       body.zap_ajax_spider = document.getElementById("s-zap-ajax").checked;

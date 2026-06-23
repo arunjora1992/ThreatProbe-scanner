@@ -59,12 +59,15 @@ def create_scan(payload: ScanCreate, db: Session = Depends(get_db),
         db.add(scan)
         db.commit()
         db.refresh(scan)
-        launch = start_cis_scan if payload.scan_type == "cis_benchmark" else start_credentialed_scan
-        launch(
+        kw = dict(
             scan_id=scan.id, address=target.address, port=payload.ssh_port,
             username=payload.ssh_username, password=payload.ssh_password,
             key_text=payload.ssh_key, key_passphrase=payload.ssh_key_passphrase,
         )
+        if payload.scan_type == "cis_benchmark":
+            start_cis_scan(prefer_profile=payload.cis_profile or "", **kw)
+        else:
+            start_credentialed_scan(**kw)
         return scan
 
     # ZAP scans that need authentication and/or the browser-driven AJAX spider run in

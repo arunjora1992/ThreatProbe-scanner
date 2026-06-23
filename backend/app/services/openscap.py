@@ -125,8 +125,13 @@ def find_cis_profile(ex: Callable[[str], str], datastream: str, prefer: str = ""
     if not ids:
         return ""
     if prefer:
+        # Prefer an exact level suffix (e.g. '_cis_server_l1', or '_cis' for L2 Server)
+        # so levels don't collide, then fall back to a substring match.
         for pid in ids:
-            if prefer in pid:
+            if pid.lower().endswith(prefer.lower()):
+                return pid
+        for pid in ids:
+            if prefer.lower() in pid.lower():
                 return pid
     cis = [p for p in ids if "cis" in p.lower()]
     if not cis:

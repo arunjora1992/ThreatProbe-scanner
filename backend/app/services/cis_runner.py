@@ -19,10 +19,12 @@ from .ssh_scanner import collect_compliance
 _SEV = {"CRITICAL": 5, "HIGH": 4, "MEDIUM": 3, "LOW": 2, "INFO": 1, "NONE": 0}
 
 
-def _assess_host(db, scan, host_addr, port, username, password, key_text, key_passphrase):
+def _assess_host(db, scan, host_addr, port, username, password, key_text, key_passphrase,
+                 prefer_profile=""):
     scanlog.log(db, scan, f"[{host_addr}] SSH connecting on port {port} for CIS audit…")
     cr = collect_compliance(host=host_addr, port=port, username=username,
                             password=password, key_text=key_text, key_passphrase=key_passphrase,
+                            prefer_profile=prefer_profile,
                             log=lambda m: scanlog.log(db, scan, f"[{host_addr}] {m}"))
     host = Host(scan_id=scan.id, address=host_addr, hostname="", state="up",
                 os_guess=f"{cr.os_name} {cr.os_version}".strip())
@@ -62,7 +64,8 @@ def _assess_host(db, scan, host_addr, port, username, password, key_text, key_pa
     return len(cr.results), fails, cr.score
 
 
-def _run(scan_id, address, port, username, password, key_text, key_passphrase):
+def _run(scan_id, address, port, username, password, key_text, key_passphrase,
+         prefer_profile=""):
     db = SessionLocal()
     try:
         scan = db.get(Scan, scan_id)
@@ -71,7 +74,7 @@ def _run(scan_id, address, port, username, password, key_text, key_passphrase):
         scan.status = "running"
         scan.started_at = datetime.utcnow()
         scan.progress = 5
-        scan.profile = "cis-benchmark (OpenSCAP / hardening)"
+        scan.profile = f"cis-benchmark{(' ' + prefer_profile) if prefer_profile else ''}"
         db.commit()
 
         hosts = expand_targets(address) or [address]
@@ -85,7 +88,7 @@ def _run(scan_id, address, port, username, password, key_text, key_passphrase):
                 break
             try:
                 n, f, _score = _assess_host(db, scan, h, port, username, password,
-                                            key_text, key_passphrase)
+                                            key_text, key_passphrase, prefer_profile)
                 tot_checks += n
                 tot_fails += f
             except Exception as exc:  # noqa: BLE001 - one host failing shouldn't kill the rest
@@ -126,11 +129,12 @@ def _run(scan_id, address, port, username, password, key_text, key_passphrase):
 
 def start_cis_scan(scan_id: int, address: str, port: int, username: str,
                    password: Optional[str], key_text: Optional[str],
-                   key_passphrase: Optional[str]):
+                   key_passphrase: Optional[str], prefer_profile: str = ""):
     """Launch the CIS audit in a daemon thread; credentials stay in memory only."""
     t = threading.Thread(
         target=_run,
-        args=(scan_id, address, port, username, password, key_text, key_passphrase),
+        args=(scan_id, address, port, username, password, key_text, key_passphrase,
+              prefer_profile),
         daemon=True,
     )
     t.start()

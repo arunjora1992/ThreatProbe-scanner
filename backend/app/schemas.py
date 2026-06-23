@@ -57,6 +57,9 @@ class ScanCreate(BaseModel):
     ssh_key: Optional[str] = None
     ssh_key_passphrase: Optional[str] = None
     ssh_port: int = 22
+    # CIS benchmark (cis_benchmark): which profile/level to evaluate. A suffix matched
+    # against the datastream's profile ids (e.g. "_cis_server_l1", "_cis" for L2 server).
+    cis_profile: Optional[str] = None
     # Web-app login for authenticated ZAP scans (scan_type == zap_passive/zap_active).
     # Supplying these runs a deeper, logged-in crawl/attack. NEVER persisted —
     # used in-memory by the backend for the duration of the scan only.
