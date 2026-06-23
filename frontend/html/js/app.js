@@ -489,6 +489,8 @@
           <thead><tr><th>Finding</th><th>Category</th><th>Severity</th><th>Remediation</th></tr></thead>
           <tbody>${webRows}</tbody></table></div>
         ${scan.scan_type === "credentialed" ? `
+        <h3 class="section-title" style="margin-top:22px">Hardening checks (CIS-style) <span id="cfg-count" class="muted small"></span></h3>
+        <div id="cfg-box">${loading()}</div>
         <div class="page-head" style="margin-top:22px;margin-bottom:8px">
           <h3 class="section-title" style="margin:0">Installed package inventory</h3>
           <label class="muted small"><input type="checkbox" id="pkg-vuln-only" style="width:auto" onchange="ptLoadPackages(${scan.id})"> show vulnerable only</label>
@@ -496,7 +498,7 @@
         <input id="pkg-q" placeholder="Filter packages by name…" style="margin-bottom:8px" oninput="ptDebouncePkgs(${scan.id})">
         <div id="pkg-box">${loading()}</div>` : ""}`;
 
-      if (scan.scan_type === "credentialed") ptLoadPackages(scan.id);
+      if (scan.scan_type === "credentialed") { ptLoadConfigFindings(scan.id); ptLoadPackages(scan.id); }
 
       // Load the live log (and keep streaming it while the scan runs).
       logOffset = 0;
@@ -567,6 +569,37 @@
   window.ptDownloadPkgs = (id) =>
     API.download(`/api/reports/scan/${id}/packages.csv`, `scan_${id}_package_inventory.csv`)
       .catch((ex) => toast(ex.message, "err"));
+
+  window.ptLoadConfigFindings = async (id) => {
+    const box = document.getElementById("cfg-box");
+    if (!box) return;
+    try {
+      const data = await API.get(`/api/scans/${id}/config-findings`);
+      const cnt = document.getElementById("cfg-count");
+      if (!data.findings.length) {
+        if (cnt) cnt.textContent = "";
+        box.innerHTML = `<p class="muted small">No hardening data (older scan, or checks could not run).</p>`;
+        return;
+      }
+      if (cnt) cnt.innerHTML = `· <b style="color:var(--high)">${data.fails} issue(s)</b> of ${data.total} checks`;
+      const rows = data.findings.map((f) => {
+        const st = f.status === "fail"
+          ? sevBadge(f.severity)
+          : (f.status === "pass" ? '<span class="status-badge status-completed">pass</span>'
+                                 : '<span class="status-badge">n/a</span>');
+        return `<tr>
+          <td>${st}</td>
+          <td><b>${esc(f.title)}</b><br><span class="muted small">${esc(f.detail)}</span>
+            ${f.evidence ? `<br><span class="muted small mono">${esc(f.evidence.slice(0, 160))}</span>` : ""}</td>
+          <td class="small">${f.status === "fail" ? esc(f.remediation) : "—"}</td>
+        </tr>`;
+      }).join("");
+      box.innerHTML = `<div class="table-wrap"><table class="fixed">
+        <colgroup><col style="width:12%"><col style="width:55%"><col style="width:33%"></colgroup>
+        <thead><tr><th>Result</th><th>Check</th><th>Remediation</th></tr></thead>
+        <tbody>${rows}</tbody></table></div>`;
+    } catch (ex) { box.innerHTML = errBox(ex); }
+  };
 
   let pkgDebounce = null;
   window.ptDebouncePkgs = (id) => { clearTimeout(pkgDebounce); pkgDebounce = setTimeout(() => ptLoadPackages(id), 300); };
@@ -762,7 +795,18 @@
   window.ptImportThreatIntel = async () => {
     toast("Importing KEV + EPSS from /data/cve_feeds … enriching existing CVEs");
     try {
-      const r = await API.post("/api/cves/threat-intel/import");
+      let r = await API.post("/api/cves/threat-intel/import");
+      // If no local feed files were present, offer to fetch them online.
+      if ((r.kev_updated || 0) === 0 && (r.epss_updated || 0) === 0
+          && /no (KEV|EPSS) file/i.test(r.message || "")) {
+        if (confirm("No KEV/EPSS files found in /data/cve_feeds.\n\nFetch them online now? "
+            + "(needs internet — use this only on a connected host; on an air-gapped host, "
+            + "drop known_exploited_vulnerabilities.json and epss_scores-current.csv.gz in "
+            + "data/cve_feeds/ instead.)")) {
+          toast("Fetching KEV + EPSS online… (EPSS is ~250k rows, give it a moment)");
+          r = await API.post("/api/cves/threat-intel/import?online=true");
+        }
+      }
       toast(r.message || "Threat-intel imported");
     } catch (ex) { toast(ex.message, "err"); }
   };

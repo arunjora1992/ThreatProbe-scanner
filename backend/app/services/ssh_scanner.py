@@ -15,6 +15,8 @@ from typing import List, Optional, Tuple
 
 import paramiko
 
+from . import hardening
+
 CONNECT_TIMEOUT = 20
 EXEC_TIMEOUT = 60
 
@@ -25,6 +27,7 @@ class HostFacts:
     os_version: str = ""
     kernel: str = ""
     packages: List[Tuple[str, str, str]] = field(default_factory=list)  # (name, clean_version, full_version)
+    hardening: List["hardening.HardeningResult"] = field(default_factory=list)
 
 
 def _clean_version(full: str) -> str:
@@ -50,8 +53,8 @@ def _load_pkey(key_text: str, passphrase: Optional[str]):
     raise RuntimeError("Could not parse the provided private key (unsupported format or wrong passphrase).")
 
 
-def _exec(client: paramiko.SSHClient, cmd: str) -> str:
-    stdin, stdout, stderr = client.exec_command(cmd, timeout=EXEC_TIMEOUT)
+def _exec(client: paramiko.SSHClient, cmd: str, timeout: int = EXEC_TIMEOUT) -> str:
+    stdin, stdout, stderr = client.exec_command(cmd, timeout=timeout)
     return stdout.read().decode("utf-8", errors="replace")
 
 
@@ -85,6 +88,7 @@ def collect_host_facts(
     password: Optional[str] = None,
     key_text: Optional[str] = None,
     key_passphrase: Optional[str] = None,
+    run_hardening: bool = True,
 ) -> HostFacts:
     """Connect over SSH and gather OS + installed-package facts.
 
@@ -125,6 +129,12 @@ def collect_host_facts(
                 "Connected, but could not enumerate packages (no dpkg/rpm output). "
                 "Is this a Linux host with dpkg or rpm?"
             )
+        # CIS-style hardening checks over the same session (read-only, best-effort).
+        if run_hardening:
+            # The world-writable-dirs check runs a bounded `find` (timeout 25s), so allow
+            # a longer per-command window than the package queries.
+            facts.hardening = hardening.run_hardening_checks(
+                lambda cmd: _exec(client, cmd, timeout=40))
         return facts
     finally:
         client.close()

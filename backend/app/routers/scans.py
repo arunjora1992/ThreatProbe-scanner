@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 
 from ..auth import get_current_user
 from ..database import get_db
-from ..models import CVE, Finding, Host, Package, Scan, Service, Target, User, WebFinding
+from ..models import CVE, ConfigFinding, Finding, Host, Package, Scan, Service, Target, User, WebFinding
 from ..schemas import (
     FindingOut,
     HostOut,
@@ -181,6 +181,30 @@ def scan_web_findings(scan_id: int, db: Session = Depends(get_db),
         }
         for r in rows
     ]
+
+
+@router.get("/{scan_id}/config-findings")
+def scan_config_findings(scan_id: int, db: Session = Depends(get_db),
+                         _: User = Depends(get_current_user)):
+    """CIS-style hardening / misconfiguration findings from a credentialed scan."""
+    if not db.get(Scan, scan_id):
+        raise HTTPException(status_code=404, detail="Scan not found")
+    rows = db.query(ConfigFinding).filter(ConfigFinding.scan_id == scan_id).all()
+    sev_order = {"CRITICAL": 5, "HIGH": 4, "MEDIUM": 3, "LOW": 2, "INFO": 1}
+    # Failures first (by severity), then passes/errors.
+    rows.sort(key=lambda r: (r.status == "fail", sev_order.get(r.severity, 0)), reverse=True)
+    fails = sum(1 for r in rows if r.status == "fail")
+    return {
+        "total": len(rows), "fails": fails,
+        "findings": [
+            {
+                "host": r.host, "check_id": r.check_id, "title": r.title,
+                "severity": r.severity, "status": r.status, "detail": r.detail,
+                "remediation": r.remediation, "evidence": r.evidence,
+            }
+            for r in rows
+        ],
+    }
 
 
 @router.get("/{scan_id}/log")

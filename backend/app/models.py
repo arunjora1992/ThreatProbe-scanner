@@ -99,6 +99,7 @@ class Scan(Base):
     findings = relationship("Finding", back_populates="scan", cascade="all, delete-orphan")
     web_findings = relationship("WebFinding", back_populates="scan", cascade="all, delete-orphan")
     packages = relationship("Package", back_populates="scan", cascade="all, delete-orphan")
+    config_findings = relationship("ConfigFinding", back_populates="scan", cascade="all, delete-orphan")
 
 
 class Host(Base):
@@ -209,6 +210,29 @@ class WebFinding(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     scan = relationship("Scan", back_populates="web_findings")
+
+
+class ConfigFinding(Base):
+    """CIS-style host-hardening / misconfiguration findings from a credentialed scan.
+
+    These are NOT CVE-linked — they're configuration weaknesses (SSH config, password
+    policy, sysctl hardening, firewall/audit posture, world-writable files, …) gathered
+    by read-only commands over the same SSH session as the package audit.
+    """
+    __tablename__ = "config_findings"
+    id = Column(Integer, primary_key=True)
+    scan_id = Column(Integer, ForeignKey("scans.id", ondelete="CASCADE"), nullable=False, index=True)
+    host = Column(String(255), default="")
+    check_id = Column(String(64), default="")
+    title = Column(String(255), default="")
+    severity = Column(String(16), default="INFO", index=True)  # CRITICAL/HIGH/MEDIUM/LOW/INFO
+    status = Column(String(16), default="fail")  # fail | pass | error
+    detail = Column(Text, default="")
+    remediation = Column(Text, default="")
+    evidence = Column(Text, default="")
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    scan = relationship("Scan", back_populates="config_findings")
 
 
 class Finding(Base):

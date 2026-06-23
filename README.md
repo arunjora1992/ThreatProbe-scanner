@@ -322,6 +322,25 @@ dedicated **Package inventory CSV** from the scan detail page. Because credentia
 scans run inside the backend (so credentials need never be persisted for a DB worker),
 they start immediately rather than queueing.
 
+#### CIS-style hardening checks
+
+Over the **same SSH session**, the credentialed scan also runs a set of read-only
+**host-hardening checks** — configuration weaknesses no CVE feed will ever surface.
+Results appear in a **Hardening checks (CIS-style)** section on the scan detail page,
+failures ranked by severity. Current checks:
+
+- SSH `PermitRootLogin` and `PasswordAuthentication`
+- Non-root UID 0 accounts; accounts with empty passwords
+- Password expiry policy (`PASS_MAX_DAYS`)
+- ASLR (`kernel.randomize_va_space`) and IP forwarding (`net.ipv4.ip_forward`)
+- Active host firewall (firewalld/ufw/nftables/iptables) and audit daemon (auditd)
+- Legacy insecure services (telnet/rsh/rlogin/tftp)
+- World-writable directories without the sticky bit (bounded, time-limited scan)
+
+All checks are **read-only** and best-effort: one that can't run (e.g. `/etc/shadow`
+needs more privilege than the scan account has) is reported as *n/a* rather than a false
+pass/fail — so prefer a scan account with adequate `sudo`/read access for full coverage.
+
 ### Matching accuracy & limitations
 
 Correlation is **version-aware**: a service/package is only reported when its detected

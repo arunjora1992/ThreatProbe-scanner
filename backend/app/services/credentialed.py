@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import Optional
 
 from ..database import SessionLocal
-from ..models import Finding, Host, Package, Scan, Service
+from ..models import ConfigFinding, Finding, Host, Package, Scan, Service
 from . import scanlog
 from .cve_matcher import correlate_package, latest_fix_version
 from .scanner import expand_targets
@@ -104,6 +104,21 @@ def _assess_host(db, scan, host_addr, port, username, password, key_text, key_pa
             scanlog.log(db, scan, f"[{host_addr}] {idx}/{total} packages, {vuln_pkgs} vulnerable so far")
             db.commit()
     db.commit()
+
+    # Persist CIS-style hardening findings (read-only checks run over the same session).
+    hardening_fails = 0
+    for hr in facts.hardening:
+        if hr.status == "fail":
+            hardening_fails += 1
+        db.add(ConfigFinding(
+            scan_id=scan.id, host=host_addr, check_id=hr.check_id, title=hr.title,
+            severity=hr.severity, status=hr.status, detail=hr.detail,
+            remediation=hr.remediation, evidence=hr.evidence,
+        ))
+    db.commit()
+    if facts.hardening:
+        scanlog.log(db, scan, f"[{host_addr}] hardening checks: {hardening_fails} issue(s) "
+                              f"across {len(facts.hardening)} checks")
     scanlog.log(db, scan, f"[{host_addr}] done: {len(facts.packages)} packages, {vuln_pkgs} vulnerable")
     return len(facts.packages), vuln_pkgs
 
