@@ -218,6 +218,7 @@
         <select id="s-type" onchange="ptToggleScanFields()">
           <option value="full">Server vulnerability assessment (nmap -sV + CVE)</option>
           <option value="credentialed">Credentialed Linux assessment (SSH package audit)</option>
+          <option value="cis_benchmark">CIS benchmark / hardening audit (OpenSCAP, authenticated)</option>
           <option value="discovery">Host discovery (ping sweep)</option>
           <option value="port">Port scan (open ports only)</option>
           <option value="web">Web / URL test — built-in (passive, non-destructive)</option>
@@ -230,6 +231,7 @@
         <input id="s-custom" placeholder="-sT -sV -p 1-1000 --script vuln"></div>
       <div id="s-cred-rows" class="hidden">
         <div class="card" style="background:var(--bg-2);margin-bottom:6px">
+          <p class="small muted" id="s-cis-note" style="margin-bottom:10px;display:none">🛡 Runs the official <b>CIS benchmark via OpenSCAP</b> when the target has <code>oscap</code> + SSG content installed; otherwise falls back to built-in hardening checks. Use an account with sufficient privilege (sudo/root) for full coverage.</p>
           <p class="small muted" style="margin-bottom:10px">🔐 Credentials are used in-memory for this scan only and are <b>never stored</b>. The target address is used as the SSH host.</p>
           <div class="form-row"><label>SSH username</label><input id="s-user" placeholder="e.g. ec2-user" autocomplete="off"></div>
           <div class="form-row"><label>SSH port</label><input id="s-port" type="number" value="22"></div>
@@ -273,8 +275,10 @@
   };
   window.ptToggleScanFields = () => {
     const v = document.getElementById("s-type").value;
+    const sshScan = v === "credentialed" || v === "cis_benchmark";
     document.getElementById("s-custom-row").classList.toggle("hidden", v !== "custom");
-    document.getElementById("s-cred-rows").classList.toggle("hidden", v !== "credentialed");
+    document.getElementById("s-cred-rows").classList.toggle("hidden", !sshScan);
+    document.getElementById("s-cis-note").style.display = v === "cis_benchmark" ? "" : "none";
     document.getElementById("s-zap-warn").classList.toggle("hidden", v !== "zap_active");
     document.getElementById("s-zap-rows").classList.toggle(
       "hidden", v !== "zap_passive" && v !== "zap_active");
@@ -296,7 +300,7 @@
     const scan_type = document.getElementById("s-type").value;
     const body = { target_id, scan_type };
     if (scan_type === "custom") body.custom_flags = document.getElementById("s-custom").value.trim();
-    if (scan_type === "credentialed") {
+    if (scan_type === "credentialed" || scan_type === "cis_benchmark") {
       body.ssh_username = document.getElementById("s-user").value.trim();
       body.ssh_password = document.getElementById("s-pass").value || null;
       body.ssh_key = document.getElementById("s-key").value.trim() || null;
@@ -488,9 +492,10 @@
           <colgroup><col style="width:40%"><col style="width:14%"><col style="width:10%"><col style="width:36%"></colgroup>
           <thead><tr><th>Finding</th><th>Category</th><th>Severity</th><th>Remediation</th></tr></thead>
           <tbody>${webRows}</tbody></table></div>
+        ${scan.scan_type === "cis_benchmark" ? `
+        <h3 class="section-title" style="margin-top:22px">CIS benchmark / hardening results <span id="cfg-count" class="muted small"></span></h3>
+        <div id="cfg-box">${loading()}</div>` : ""}
         ${scan.scan_type === "credentialed" ? `
-        <h3 class="section-title" style="margin-top:22px">Hardening checks (CIS-style) <span id="cfg-count" class="muted small"></span></h3>
-        <div id="cfg-box">${loading()}</div>
         <div class="page-head" style="margin-top:22px;margin-bottom:8px">
           <h3 class="section-title" style="margin:0">Installed package inventory</h3>
           <label class="muted small"><input type="checkbox" id="pkg-vuln-only" style="width:auto" onchange="ptLoadPackages(${scan.id})"> show vulnerable only</label>
@@ -498,7 +503,8 @@
         <input id="pkg-q" placeholder="Filter packages by name…" style="margin-bottom:8px" oninput="ptDebouncePkgs(${scan.id})">
         <div id="pkg-box">${loading()}</div>` : ""}`;
 
-      if (scan.scan_type === "credentialed") { ptLoadConfigFindings(scan.id); ptLoadPackages(scan.id); }
+      if (scan.scan_type === "cis_benchmark") ptLoadConfigFindings(scan.id);
+      if (scan.scan_type === "credentialed") ptLoadPackages(scan.id);
 
       // Load the live log (and keep streaming it while the scan runs).
       logOffset = 0;
@@ -576,13 +582,17 @@
     try {
       const data = await API.get(`/api/scans/${id}/config-findings`);
       const cnt = document.getElementById("cfg-count");
-      if (!data.findings.length) {
+      // The audit-summary row carries the mode (OpenSCAP/built-in) + compliance score.
+      const summary = data.findings.find((f) => f.check_id === "audit-summary");
+      const findings = data.findings.filter((f) => f.check_id !== "audit-summary");
+      if (!findings.length) {
         if (cnt) cnt.textContent = "";
         box.innerHTML = `<p class="muted small">No hardening data (older scan, or checks could not run).</p>`;
         return;
       }
-      if (cnt) cnt.innerHTML = `· <b style="color:var(--high)">${data.fails} issue(s)</b> of ${data.total} checks`;
-      const rows = data.findings.map((f) => {
+      if (cnt) cnt.innerHTML = `· <b style="color:var(--high)">${data.fails} failed</b> of ${findings.length}`
+        + (summary ? ` · <span class="muted">${esc(summary.detail)}</span>` : "");
+      const rows = findings.map((f) => {
         const st = f.status === "fail"
           ? sevBadge(f.severity)
           : (f.status === "pass" ? '<span class="status-badge status-completed">pass</span>'

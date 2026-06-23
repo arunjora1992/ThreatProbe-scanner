@@ -237,18 +237,154 @@ def _check_world_writable_dirs(ex) -> HardeningResult:
                            evidence="")
 
 
+def _grep_check(check_id, title, severity, cmd, bad_when_found, remediation,
+                pass_detail, fail_detail):
+    """Helper for simple 'run a command; if it produces output it's a finding' checks."""
+    def _fn(ex):
+        out = _first_line(ex(cmd))
+        base = dict(check_id=check_id, title=title, remediation=remediation)
+        hit = bool(out)
+        is_fail = hit if bad_when_found else not hit
+        if is_fail:
+            return HardeningResult(**base, severity=severity, status="fail",
+                                   detail=fail_detail, evidence=out[:160])
+        return HardeningResult(**base, severity="INFO", status="pass",
+                               detail=pass_detail, evidence=out[:160])
+    return _fn
+
+
+def _check_ssh_x11(ex) -> HardeningResult:
+    out = ex("grep -RhiE '^[[:space:]]*X11Forwarding' /etc/ssh/sshd_config "
+             "/etc/ssh/sshd_config.d/ 2>/dev/null | tail -1")
+    val = (_first_line(out).split() or ["", ""])[1].lower() if _first_line(out) else ""
+    base = dict(check_id="ssh-x11-forwarding", title="SSH X11 forwarding enabled",
+                severity="LOW", remediation="Set 'X11Forwarding no' in sshd_config.")
+    if val == "yes":
+        return HardeningResult(**base, status="fail", detail="X11Forwarding is enabled.",
+                               evidence="X11Forwarding yes")
+    return HardeningResult(**{**base, "severity": "INFO"}, status="pass",
+                           detail="X11 forwarding not enabled.", evidence=val or "default")
+
+
+def _check_umask(ex) -> HardeningResult:
+    out = ex("grep -RhiE '^[[:space:]]*UMASK' /etc/login.defs 2>/dev/null | tail -1")
+    parts = _first_line(out).split()
+    base = dict(check_id="umask", title="Weak default UMASK", severity="LOW",
+                remediation="Set UMASK to 027 (or 077) in /etc/login.defs.")
+    val = parts[1] if len(parts) >= 2 else ""
+    if val and val.lstrip("0") in ("27", "77", "37"):  # 027/077/037
+        return HardeningResult(**{**base, "severity": "INFO"}, status="pass",
+                               detail=f"UMASK {val}.", evidence=f"UMASK {val}")
+    if not val:
+        return HardeningResult(**{**base, "severity": "INFO"}, status="error",
+                               detail="UMASK not found in /etc/login.defs.", evidence="")
+    return HardeningResult(**base, status="fail",
+                           detail=f"Default UMASK is permissive (UMASK {val}).",
+                           evidence=f"UMASK {val}")
+
+
+def _check_password_min_len(ex) -> HardeningResult:
+    out = ex("grep -RhiE '^[^#]*minlen' /etc/security/pwquality.conf "
+             "/etc/security/pwquality.conf.d/ /etc/pam.d/ 2>/dev/null | tail -1")
+    base = dict(check_id="password-min-len", title="No minimum password length policy",
+                severity="LOW",
+                remediation="Set minlen >= 14 in /etc/security/pwquality.conf (or pam_pwquality).")
+    if "minlen" in out.lower():
+        return HardeningResult(**{**base, "severity": "INFO"}, status="pass",
+                               detail="A minimum password length is configured.",
+                               evidence=_first_line(out)[:120])
+    return HardeningResult(**base, status="fail",
+                           detail="No minimum password-length (pwquality/pam) policy found.",
+                           evidence="no minlen directive")
+
+
+def _check_cramfs_modules(ex) -> HardeningResult:
+    # Unneeded filesystem kernel modules that should be disabled (CIS 1.1.1.x).
+    out = ex("for m in cramfs freevxfs jffs2 hfs hfsplus udf; do "
+             "lsmod 2>/dev/null | grep -qw $m && echo $m; done")
+    loaded = [m.strip() for m in out.splitlines() if m.strip()]
+    base = dict(check_id="unused-filesystems", title="Unneeded filesystem module loaded",
+                severity="LOW",
+                remediation="Disable unused filesystem modules (cramfs/freevxfs/jffs2/hfs/"
+                            "hfsplus/udf) via modprobe blacklist.")
+    if loaded:
+        return HardeningResult(**base, status="fail",
+                               detail=f"Unneeded filesystem modules loaded: {', '.join(loaded)}.",
+                               evidence=", ".join(loaded))
+    return HardeningResult(**{**base, "severity": "INFO"}, status="pass",
+                           detail="No unneeded filesystem modules loaded.", evidence="")
+
+
+def _check_core_dumps(ex) -> HardeningResult:
+    out = ex("sysctl -n fs.suid_dumpable 2>/dev/null || cat /proc/sys/fs/suid_dumpable 2>/dev/null")
+    val = _first_line(out)
+    base = dict(check_id="suid-dumpable", title="SUID core dumps allowed", severity="LOW",
+                remediation="Set fs.suid_dumpable=0 to prevent SUID programs dumping core.")
+    if val == "0":
+        return HardeningResult(**{**base, "severity": "INFO"}, status="pass",
+                               detail="SUID core dumps disabled.", evidence="suid_dumpable 0")
+    if not val:
+        return HardeningResult(**{**base, "severity": "INFO"}, status="error",
+                               detail="Could not read fs.suid_dumpable.", evidence="")
+    return HardeningResult(**base, status="fail",
+                           detail=f"SUID programs may dump core (suid_dumpable={val}).",
+                           evidence=f"suid_dumpable {val}")
+
+
+def _check_unconfined_perms(ex) -> HardeningResult:
+    # SUID/SGID files are expected, but a quick world-writable *file* scan is high value.
+    out = ex("timeout 25 find / -xdev -type f -perm -0002 2>/dev/null | head -10")
+    files = [f.strip() for f in out.splitlines() if f.strip()]
+    base = dict(check_id="world-writable-files", title="World-writable file present",
+                severity="MEDIUM",
+                remediation="Remove world-write (chmod o-w) from these files.")
+    if files:
+        return HardeningResult(**base, status="fail",
+                               detail=f"{len(files)} world-writable file(s) (showing up to 10).",
+                               evidence="; ".join(files))
+    return HardeningResult(**{**base, "severity": "INFO"}, status="pass",
+                           detail="No world-writable files found.", evidence="")
+
+
 _CHECKS = [
     _check_permit_root_login,
     _check_password_auth,
+    _check_ssh_x11,
     _check_uid0_accounts,
     _check_empty_passwords,
     _check_password_max_age,
+    _check_password_min_len,
+    _check_umask,
     _check_aslr,
     _check_ip_forward,
+    _check_core_dumps,
     _check_firewall,
     _check_auditd,
     _check_legacy_services,
+    _check_cramfs_modules,
     _check_world_writable_dirs,
+    _check_unconfined_perms,
+    # Simple presence/sysctl checks via the _grep_check helper:
+    _grep_check("rsyslog", "System logging (rsyslog/syslog) not running", "LOW",
+                "(systemctl is-active rsyslog syslog-ng 2>/dev/null; pgrep -x rsyslogd "
+                ">/dev/null 2>&1 && echo running) | grep -E 'active|running' | head -1",
+                bad_when_found=False,
+                remediation="Enable rsyslog (or syslog-ng) so security events are recorded.",
+                pass_detail="A system logger is running.",
+                fail_detail="No system logging daemon (rsyslog/syslog-ng) active."),
+    _grep_check("ssh-root-empty-pw", "SSH permits empty passwords", "HIGH",
+                "grep -RhiE '^[[:space:]]*PermitEmptyPasswords[[:space:]]+yes' "
+                "/etc/ssh/sshd_config /etc/ssh/sshd_config.d/ 2>/dev/null | head -1",
+                bad_when_found=True,
+                remediation="Set 'PermitEmptyPasswords no' in sshd_config.",
+                pass_detail="SSH does not permit empty passwords.",
+                fail_detail="SSH is configured to permit empty passwords."),
+    _grep_check("cron-perms", "World-accessible cron configuration", "LOW",
+                "find /etc/cron* -maxdepth 1 -perm -0002 2>/dev/null | head -3",
+                bad_when_found=True,
+                remediation="Remove world-write from /etc/cron* (chmod o-w; root-owned 0600/0700).",
+                pass_detail="Cron configuration is not world-writable.",
+                fail_detail="World-writable cron configuration found."),
 ]
 
 

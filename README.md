@@ -229,6 +229,7 @@ docker compose logs -f worker      # "[worker] started; ... nmap=available"
 |-------------------------------------|---------------------------|---------|
 | **Server vulnerability assessment** (`full`) | `-sT -sV -T4 --open` | Open ports + service/version detection, then CVE correlation. Unauthenticated/remote. |
 | **Credentialed Linux assessment** (`credentialed`) | _SSH_ | Authenticated scan: logs in over SSH, enumerates **all installed packages + versions**, and reports each package's CVEs, criticality, and the **version to upgrade to**. Credentials are used in-memory only and never stored. |
+| **CIS benchmark / hardening audit** (`cis_benchmark`) | _SSH_ | Authenticated, **agentless** host-hardening audit: official CIS profile via OpenSCAP when present, else built-in read-only checks. Reports failed controls + remediation (+ compliance score with OpenSCAP). Credentials in-memory only. |
 | **Host discovery** (`discovery`)    | `-sn`                     | Ping sweep — which hosts in a range are up. |
 | **Port scan** (`port`)              | `-sT -T4 --open`          | Open ports only (no version detection). |
 | **Web / URL penetration test** (`web`) | _n/a_                  | Built-in lightweight, non-destructive checks against the target URL (see below), incl. precise software→CVE correlation. |
@@ -322,24 +323,30 @@ dedicated **Package inventory CSV** from the scan detail page. Because credentia
 scans run inside the backend (so credentials need never be persisted for a DB worker),
 they start immediately rather than queueing.
 
-#### CIS-style hardening checks
+### CIS benchmark / hardening audit (`cis_benchmark`)
 
-Over the **same SSH session**, the credentialed scan also runs a set of read-only
-**host-hardening checks** — configuration weaknesses no CVE feed will ever surface.
-Results appear in a **Hardening checks (CIS-style)** section on the scan detail page,
-failures ranked by severity. Current checks:
+A **separate** authenticated scan type (not bundled into the package audit) that assesses
+**host hardening / misconfiguration** — weaknesses no CVE feed will ever surface. It uses
+the same in-memory SSH credentials and is **agentless**: it installs nothing on the target.
 
-- SSH `PermitRootLogin` and `PasswordAuthentication`
-- Non-root UID 0 accounts; accounts with empty passwords
-- Password expiry policy (`PASS_MAX_DAYS`)
-- ASLR (`kernel.randomize_va_space`) and IP forwarding (`net.ipv4.ip_forward`)
-- Active host firewall (firewalld/ufw/nftables/iptables) and audit daemon (auditd)
-- Legacy insecure services (telnet/rsh/rlogin/tftp)
-- World-writable directories without the sticky bit (bounded, time-limited scan)
+Two engines, auto-selected:
 
-All checks are **read-only** and best-effort: one that can't run (e.g. `/etc/shadow`
-needs more privilege than the scan account has) is reported as *n/a* rather than a false
-pass/fail — so prefer a scan account with adequate `sudo`/read access for full coverage.
+- **OpenSCAP (optional, opportunistic)** — if the target already has `oscap` + SCAP
+  Security Guide content, the scan runs the **official CIS profile** and imports every
+  rule (CIS rule id, severity, pass/fail, remediation) plus a **compliance score**. We do
+  **not** require or install it — it's used only when present.
+- **Built-in agentless checks (default fallback)** — when OpenSCAP isn't available, a set
+  of read-only checks run from the scanner over SSH (reading configs, sysctls, perms):
+  SSH config (root login, password/empty-password auth, X11), password policy
+  (`PASS_MAX_DAYS`, pwquality minlen), UMASK, UID-0 accounts, ASLR, IP forwarding, SUID
+  core dumps, host firewall, auditd, system logging, legacy services (telnet/rsh/tftp),
+  unneeded filesystem modules, world-writable files/dirs, cron permissions, and more.
+
+Results appear in a **CIS benchmark / hardening results** section on the scan detail page,
+failures ranked by severity, with the engine + score in the header. All checks are
+**read-only** and best-effort: one that can't run (e.g. `/etc/shadow` needs more privilege
+than the scan account has) is reported as *n/a* rather than a false pass/fail — so prefer a
+scan account with adequate `sudo`/read access for full coverage.
 
 ### Matching accuracy & limitations
 

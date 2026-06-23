@@ -13,13 +13,14 @@ from ..schemas import (
     ScanOut,
 )
 from ..services.credentialed import start_credentialed_scan
+from ..services.cis_runner import start_cis_scan
 from ..services.zap_runner import start_zap_bg_scan
 from ..services.zap_scanner import ZapAuth
 
 router = APIRouter(prefix="/api/scans", tags=["scans"])
 
 VALID_TYPES = {"discovery", "port", "full", "web", "custom", "credentialed",
-               "zap_passive", "zap_active"}
+               "cis_benchmark", "zap_passive", "zap_active"}
 
 
 @router.get("", response_model=list[ScanOut])
@@ -42,23 +43,24 @@ def create_scan(payload: ScanCreate, db: Session = Depends(get_db),
     if not target:
         raise HTTPException(status_code=404, detail="Target not found")
 
-    # Credentialed (SSH) scans run in the backend, not the DB worker, so the
-    # supplied credentials are never written to the database.
-    if payload.scan_type == "credentialed":
+    # SSH-credentialed scans (package/CVE audit and CIS benchmark) run in the backend,
+    # not the DB worker, so the supplied credentials are never written to the database.
+    if payload.scan_type in ("credentialed", "cis_benchmark"):
         if not payload.ssh_username or not (payload.ssh_password or payload.ssh_key):
             raise HTTPException(
                 status_code=400,
-                detail="Credentialed scans require ssh_username and ssh_password or ssh_key",
+                detail="This scan requires ssh_username and ssh_password or ssh_key",
             )
         scan = Scan(
-            target_id=target.id, scan_type="credentialed",
+            target_id=target.id, scan_type=payload.scan_type,
             status="running",  # claimed immediately so the DB worker never picks it up
             created_by=user.username,
         )
         db.add(scan)
         db.commit()
         db.refresh(scan)
-        start_credentialed_scan(
+        launch = start_cis_scan if payload.scan_type == "cis_benchmark" else start_credentialed_scan
+        launch(
             scan_id=scan.id, address=target.address, port=payload.ssh_port,
             username=payload.ssh_username, password=payload.ssh_password,
             key_text=payload.ssh_key, key_passphrase=payload.ssh_key_passphrase,

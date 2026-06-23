@@ -23,8 +23,8 @@ def _claim_next_scan(db):
     scan = (
         db.query(Scan)
         .filter(Scan.status == "queued")
-        # credentialed scans are executed by the backend (in-memory creds), not here
-        .filter(Scan.scan_type != "credentialed")
+        # credentialed + CIS scans are executed by the backend (in-memory creds), not here
+        .filter(Scan.scan_type.notin_(["credentialed", "cis_benchmark"]))
         .order_by(Scan.created_at.asc())
         .with_for_update(skip_locked=True)
         .first()
