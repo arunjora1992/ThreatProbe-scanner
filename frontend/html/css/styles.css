@@ -137,6 +137,7 @@ tbody tr:hover { background: var(--panel-2); }
 .status-running { color: var(--med); border-color: var(--med); }
 .status-failed { color: var(--high); border-color: var(--high); }
 .status-queued { color: var(--low); border-color: var(--low); }
+.status-cancelled { color: var(--muted); border-color: var(--muted); }
 
 /* ---- Forms ---- */
 .form-row { display: flex; flex-direction: column; gap: 5px; margin-bottom: 14px; }

@@ -17,6 +17,7 @@ from typing import Optional
 from ..database import SessionLocal
 from ..models import Scan, WebFinding
 from . import scanlog, zap_scanner
+from .cancel import is_cancelled
 from .scanner import expand_targets
 
 
@@ -40,7 +41,11 @@ def _run(scan_id: int, active: bool, auth: "Optional[zap_scanner.ZapAuth]", ajax
                               f"{len(urls)} URL(s){who}"
                               f"{' with AJAX (browser) spider' if ajax else ''}.")
         summaries = []
+        cancelled = False
         for ui, url in enumerate(urls):
+            if is_cancelled(db, scan_id):
+                cancelled = True
+                break
             scanlog.log(db, scan, f"ZAP {'ACTIVE' if active else 'passive'} scan of {url}")
             result = zap_scanner.run_zap_scan(url, active=active, log_cb=cb,
                                               auth=auth, ajax_spider=ajax)
@@ -57,11 +62,14 @@ def _run(scan_id: int, active: bool, auth: "Optional[zap_scanner.ZapAuth]", ajax
             db.commit()
 
         scan.raw_output = "\n".join(summaries)
-        scan.status = "completed"
+        scan.status = "cancelled" if cancelled else "completed"
+        if cancelled:
+            scan.error = "Scan stopped by operator."
+            scanlog.log(db, scan, "Scan stopped by operator.")
         scan.progress = 100
         scan.finished_at = datetime.utcnow()
         db.commit()
-        print(f"[zap-bg] scan {scan_id} completed", flush=True)
+        print(f"[zap-bg] scan {scan_id} {scan.status}", flush=True)
     except Exception as exc:  # noqa: BLE001 - background thread must not crash the backend
         db.rollback()
         scan = db.get(Scan, scan_id)

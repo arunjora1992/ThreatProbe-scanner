@@ -14,6 +14,7 @@ from typing import Optional
 from ..database import SessionLocal
 from ..models import CVE, Finding, Host, Package, Scan, Service
 from . import distro_feeds, scanlog
+from .cancel import ScanCancelled, is_cancelled
 from .cve_matcher import correlate_package, latest_fix_version
 from .scanner import expand_targets
 from .ssh_scanner import collect_host_facts
@@ -154,6 +155,8 @@ def _assess_host(db, scan, host_addr, port, username, password, key_text, key_pa
         if idx % 200 == 0 and idx:
             scanlog.log(db, scan, f"[{host_addr}] {idx}/{total} packages, {vuln_pkgs} vulnerable so far")
             db.commit()
+            if is_cancelled(db, scan.id):
+                raise ScanCancelled()
     db.commit()
     scanlog.log(db, scan, f"[{host_addr}] done: {len(facts.packages)} packages, {vuln_pkgs} vulnerable")
     return len(facts.packages), vuln_pkgs
@@ -176,11 +179,18 @@ def _run(scan_id, address, port, username, password, key_text, key_passphrase):
                               f"{', '.join(hosts)}")
         tot_pkgs = tot_vuln = 0
         errors = []
+        cancelled = False
         for i, h in enumerate(hosts):
+            if is_cancelled(db, scan_id):
+                cancelled = True
+                break
             try:
                 p, v = _assess_host(db, scan, h, port, username, password, key_text, key_passphrase)
                 tot_pkgs += p
                 tot_vuln += v
+            except ScanCancelled:
+                cancelled = True
+                break
             except Exception as exc:  # noqa: BLE001 - one host failing shouldn't kill the rest
                 db.rollback()
                 errors.append(f"{h}: {exc}")
@@ -190,7 +200,11 @@ def _run(scan_id, address, port, username, password, key_text, key_passphrase):
 
         scan.raw_output = (f"{len(hosts)} host(s); {tot_pkgs} packages; {tot_vuln} vulnerable."
                            + (f" Errors: {'; '.join(errors)}" if errors else ""))
-        if errors and len(errors) == len(hosts):
+        if cancelled:
+            scan.status = "cancelled"
+            scan.error = "Scan stopped by operator."
+            scanlog.log(db, scan, "Scan stopped by operator.")
+        elif errors and len(errors) == len(hosts):
             scan.status = "failed"
             scan.error = "; ".join(errors)[:2000]
         else:

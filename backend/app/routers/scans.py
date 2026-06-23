@@ -250,6 +250,31 @@ def scan_packages(scan_id: int, only_vulnerable: bool = False, q: str | None = N
     }
 
 
+@router.post("/{scan_id}/cancel", response_model=ScanOut)
+def cancel_scan(scan_id: int, db: Session = Depends(get_db),
+                user: User = Depends(get_current_user)):
+    """Request a running/queued scan to stop. Executors abort cooperatively and mark it
+    'cancelled'. A queued scan (not yet started) is cancelled immediately."""
+    if user.role == "viewer":
+        raise HTTPException(status_code=403, detail="Viewers cannot stop scans")
+    scan = db.get(Scan, scan_id)
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    if scan.status in ("completed", "failed", "cancelled"):
+        return scan  # already finished — nothing to stop
+    scan.cancel_requested = True
+    if scan.status == "queued":
+        # Hasn't started; stop it now so the worker never picks it up.
+        scan.status = "cancelled"
+        scan.error = "Cancelled before it started."
+        from datetime import datetime
+        scan.finished_at = datetime.utcnow()
+        scan.progress = 100
+    db.commit()
+    db.refresh(scan)
+    return scan
+
+
 @router.delete("/{scan_id}", status_code=204)
 def delete_scan(scan_id: int, db: Session = Depends(get_db),
                 user: User = Depends(get_current_user)):

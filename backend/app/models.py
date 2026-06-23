@@ -98,7 +98,8 @@ class Scan(Base):
     target_id = Column(Integer, ForeignKey("targets.id", ondelete="CASCADE"), nullable=False)
     scan_type = Column(String(32), default="full")  # discovery | full | port | custom
     profile = Column(String(255), default="")  # nmap flags actually used
-    status = Column(String(32), default="queued", index=True)  # queued|running|completed|failed
+    status = Column(String(32), default="queued", index=True)  # queued|running|completed|failed|cancelled
+    cancel_requested = Column(Boolean, default=False)  # operator asked to stop; executors abort
     progress = Column(Integer, default=0)
     error = Column(Text, default="")
     raw_output = Column(Text, default="")  # raw nmap XML/stdout for audit

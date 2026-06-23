@@ -384,6 +384,7 @@
           <td>${fmtDate(s.created_at)}</td>
           <td onclick="event.stopPropagation()" class="pill-row">
             <button class="btn btn-sm" onclick="ptOpenScan(${s.id})">View</button>
+            ${(s.status === "running" || s.status === "queued") ? `<button class="btn btn-sm" onclick="ptCancelScan(${s.id})">⏹ Stop</button>` : ""}
             <button class="btn btn-sm btn-danger" onclick="ptDelScan(${s.id})">Del</button>
           </td></tr>`;
       }).join("") || `<tr><td colspan="7" class="empty">No scans yet. Launch one from Targets.</td></tr>`;
@@ -394,6 +395,14 @@
     if (!confirm("Delete scan #" + id + "?")) return;
     try { await API.del(`/api/scans/${id}`); toast("Deleted"); refreshScans(); }
     catch (ex) { toast(ex.message, "err"); }
+  };
+  window.ptCancelScan = async (id) => {
+    if (!confirm("Stop scan #" + id + "? It will halt at the next safe point.")) return;
+    try {
+      await API.post(`/api/scans/${id}/cancel`);
+      toast("Stop requested — the scan will halt shortly");
+      if (typeof refreshScans === "function") refreshScans();
+    } catch (ex) { toast(ex.message, "err"); }
   };
 
   // ---------- Scan detail ----------
@@ -471,6 +480,7 @@
           <h1>Scan #${scan.id} <span class="muted" style="font-size:14px">${esc(scan.scan_type)}</span></h1>
           <div class="pill-row">
             <button class="btn" onclick="ptRoute('scans')">← Back</button>
+            ${(scan.status === "running" || scan.status === "queued") ? `<button class="btn" onclick="ptCancelScan(${scan.id})">⏹ Stop</button>` : ""}
             <button class="btn" onclick="ptRescan(${scan.target_id}, '${esc(scan.scan_type)}')">🔄 Rescan</button>
             <button class="btn btn-primary" onclick="ptDownload(${scan.id},'pdf')">⬇ PDF report</button>
             <button class="btn btn-primary" onclick="ptDownload(${scan.id},'csv')">⬇ CSV report</button>

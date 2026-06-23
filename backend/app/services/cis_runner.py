@@ -12,6 +12,7 @@ from typing import Optional
 from ..database import SessionLocal
 from ..models import ConfigFinding, Host, Scan
 from . import scanlog
+from .cancel import is_cancelled
 from .scanner import expand_targets
 from .ssh_scanner import collect_compliance
 
@@ -77,7 +78,11 @@ def _run(scan_id, address, port, username, password, key_text, key_passphrase):
         scanlog.log(db, scan, f"CIS benchmark audit of {len(hosts)} host(s): {', '.join(hosts)}")
         tot_checks = tot_fails = 0
         errors = []
+        cancelled = False
         for i, h in enumerate(hosts):
+            if is_cancelled(db, scan_id):
+                cancelled = True
+                break
             try:
                 n, f, _score = _assess_host(db, scan, h, port, username, password,
                                             key_text, key_passphrase)
@@ -92,7 +97,11 @@ def _run(scan_id, address, port, username, password, key_text, key_passphrase):
 
         scan.raw_output = (f"{len(hosts)} host(s); {tot_fails} failed control(s) of {tot_checks}."
                            + (f" Errors: {'; '.join(errors)}" if errors else ""))
-        if errors and len(errors) == len(hosts):
+        if cancelled:
+            scan.status = "cancelled"
+            scan.error = "Scan stopped by operator."
+            scanlog.log(db, scan, "Scan stopped by operator.")
+        elif errors and len(errors) == len(hosts):
             scan.status = "failed"
             scan.error = "; ".join(errors)[:2000]
         else:

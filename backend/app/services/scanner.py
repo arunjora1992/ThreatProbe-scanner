@@ -70,12 +70,16 @@ def expand_targets(address: str) -> List[str]:
 
 def run_scan(target_address: str, scan_type: str = "full",
              custom_flags: Optional[str] = None,
-             log_cb: Optional[Callable[[str], None]] = None) -> ScanResult:
+             log_cb: Optional[Callable[[str], None]] = None,
+             cancel_check: Optional[Callable[[], bool]] = None) -> ScanResult:
     """Run nmap against one or more targets and return parsed results.
 
     If log_cb is given, nmap's live progress (stderr, via --stats-every) is streamed
-    to it for the GUI terminal view. Raises RuntimeError on failure.
+    to it for the GUI terminal view. If cancel_check is given, it's polled while nmap
+    runs and the process is killed (raising ScanCancelled) when it returns True.
+    Raises RuntimeError on failure.
     """
+    from .cancel import ScanCancelled
     if not nmap_available():
         raise RuntimeError(
             "nmap is not installed in this container. Rebuild the worker image."
@@ -105,11 +109,25 @@ def run_scan(target_address: str, scan_type: str = "full",
 
     t = threading.Thread(target=_pump_stderr, daemon=True)
     t.start()
-    try:
-        stdout, _ = proc.communicate(timeout=settings.scan_timeout_seconds)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        raise RuntimeError(f"Scan timed out after {settings.scan_timeout_seconds}s")
+    # Poll in short slices so we can honour a cancel request and the overall timeout.
+    import time as _time
+    deadline = _time.time() + settings.scan_timeout_seconds
+    stdout = ""
+    while True:
+        try:
+            stdout, _ = proc.communicate(timeout=2)
+            break
+        except subprocess.TimeoutExpired:
+            if cancel_check and cancel_check():
+                proc.kill()
+                try:
+                    proc.communicate(timeout=5)
+                except Exception:
+                    pass
+                raise ScanCancelled()
+            if _time.time() > deadline:
+                proc.kill()
+                raise RuntimeError(f"Scan timed out after {settings.scan_timeout_seconds}s")
     t.join(timeout=2)
 
     if proc.returncode != 0 and not (stdout or "").strip():

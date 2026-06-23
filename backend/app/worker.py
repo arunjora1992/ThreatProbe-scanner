@@ -15,6 +15,7 @@ from .database import SessionLocal, engine, Base
 from .models import CVE, Finding, Host, Scan, Service, WebFinding
 from .config import settings
 from .services import scanner, web_scanner, zap_scanner, scanlog
+from .services.cancel import ScanCancelled, is_cancelled
 from .services.cve_matcher import correlate_package, correlate_service
 
 
@@ -45,7 +46,8 @@ def _run_network_scan(db, scan: Scan):
                           f"{', '.join(targets) or target.address}")
     # For custom scans the operator-supplied flags were stashed in scan.profile.
     custom_flags = scan.profile if scan.scan_type == "custom" else None
-    result = scanner.run_scan(target.address, scan.scan_type, custom_flags=custom_flags, log_cb=cb)
+    result = scanner.run_scan(target.address, scan.scan_type, custom_flags=custom_flags,
+                              log_cb=cb, cancel_check=lambda: is_cancelled(db, scan.id))
     scan.profile = result.flags
     scan.raw_output = result.raw_xml[:1_000_000]
     scan.progress = 40
@@ -54,6 +56,8 @@ def _run_network_scan(db, scan: Scan):
     scanlog.log(db, scan, "Correlating discovered services against the CVE database…")
     finding_seen = set()
     for phost in result.hosts:
+        if is_cancelled(db, scan.id):
+            raise ScanCancelled()
         host = Host(
             scan_id=scan.id, address=phost.address, hostname=phost.hostname,
             state=phost.state, os_guess=phost.os_guess,
@@ -93,6 +97,8 @@ def _run_web_scan(db, scan: Scan):
     urls = scanner.expand_targets(target.address) or [target.address]
     summaries = []
     for ui, url in enumerate(urls):
+        if is_cancelled(db, scan.id):
+            raise ScanCancelled()
         scanlog.log(db, scan, f"Built-in web checks against {url}…")
         result = web_scanner.run_web_scan(url)
         summaries.append(result.summary)
@@ -143,6 +149,8 @@ def _run_zap_scan(db, scan: Scan, active: bool):
     urls = scanner.expand_targets(target.address) or [target.address]
     summaries = []
     for ui, url in enumerate(urls):
+        if is_cancelled(db, scan.id):
+            raise ScanCancelled()
         scanlog.log(db, scan, f"OWASP ZAP {'ACTIVE' if active else 'passive'} scan of {url}")
         result = zap_scanner.run_zap_scan(url, active=active, log_cb=cb)
         summaries.append(result.summary)
@@ -173,6 +181,15 @@ def process_scan(db, scan: Scan):
         scan.finished_at = datetime.utcnow()
         db.commit()
         print(f"[worker] scan {scan.id} completed", flush=True)
+    except ScanCancelled:
+        db.rollback()
+        scan.status = "cancelled"
+        scan.error = "Scan stopped by operator."
+        scan.finished_at = datetime.utcnow()
+        scan.progress = 100
+        db.commit()
+        scanlog.log(db, scan, "Scan stopped by operator.")
+        print(f"[worker] scan {scan.id} cancelled", flush=True)
     except Exception as exc:  # noqa: BLE001 - worker must never die on one bad scan
         db.rollback()
         scan.status = "failed"
