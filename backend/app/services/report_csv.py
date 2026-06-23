@@ -66,18 +66,58 @@ def build_packages_csv(db: Session, scan: Scan) -> str:
     return out.getvalue()
 
 
-def build_findings_csv(db: Session, scan: Scan) -> str:
-    out = io.StringIO()
-    writer = csv.writer(out)
-    writer.writerow([
-        "Type", "Asset", "Hostname", "Port", "Protocol", "Service/Category",
-        "Product", "Version", "Finding/CVE", "Severity", "CVSS",
-        "Confidence", "Match/Evidence", "Status", "Description", "Remediation",
-        "References", "CWE",
-    ])
+_SEV_RANK = {"CRITICAL": 5, "HIGH": 4, "MEDIUM": 3, "LOW": 2, "INFO": 1, "NONE": 0}
+_nl = lambda s: (s or "").replace("\n", " ")
 
-    # ---- Network / server CVE findings ----
-    findings: List[Finding] = db.query(Finding).filter(Finding.scan_id == scan.id).all()
+
+def build_findings_csv(db: Session, scan: Scan) -> str:
+    """A CSV whose columns suit the scan type (no irrelevant blank columns)."""
+    out = io.StringIO()
+    w = csv.writer(out)
+    t = scan.scan_type
+
+    if t == "cis_benchmark":
+        w.writerow(["Result", "Severity", "Host", "Control ID", "Control", "Detail",
+                    "Remediation", "Evidence"])
+        cfg = [c for c in db.query(ConfigFinding).filter(ConfigFinding.scan_id == scan.id).all()
+               if c.check_id != "audit-summary"]
+        cfg.sort(key=lambda c: (c.status == "fail", _SEV_RANK.get(c.severity, 0)), reverse=True)
+        for c in cfg:
+            w.writerow([c.status, (c.severity if c.status == "fail" else ""), c.host,
+                        c.check_id, c.title, _nl(c.detail),
+                        _nl(c.remediation) if c.status == "fail" else "", _nl(c.evidence)])
+        return out.getvalue()
+
+    if t in ("web", "zap_passive", "zap_active"):
+        w.writerow(["URL", "Category", "Finding", "Severity", "CVSS", "CVE", "Status",
+                    "Description", "Evidence", "Remediation", "References"])
+        web = db.query(WebFinding).filter(WebFinding.scan_id == scan.id).all()
+        web.sort(key=lambda x: (_SEV_RANK.get(x.severity, 0), x.cvss_score or 0), reverse=True)
+        for x in web:
+            w.writerow([x.target_url, x.category, x.name, x.severity,
+                        x.cvss_score if x.cvss_score is not None else "", x.cve_id, x.status,
+                        _nl(x.description), _nl(x.evidence), _nl(x.remediation),
+                        (x.references or "").replace("\n", "; ")])
+        return out.getvalue()
+
+    if t == "credentialed":
+        # Package/CVE audit — package-centric columns.
+        w.writerow(["Package", "Installed Version", "Status", "Max Severity", "Max CVSS",
+                    "CVE Count", "CVEs", "Patching Remediation"])
+        rows = db.query(Package).filter(Package.scan_id == scan.id).all()
+        rows.sort(key=lambda p: (_SEV_RANK.get(p.max_severity, 0), p.max_cvss or 0), reverse=True)
+        for p in rows:
+            w.writerow([p.name, p.full_version or p.version, p.status, p.max_severity,
+                        p.max_cvss if p.max_cvss is not None else "", p.cve_count,
+                        p.cve_ids, _nl(p.remediation)])
+        return out.getvalue()
+
+    # Network scans (discovery/port/full/custom): host/port + CVE findings.
+    w.writerow(["Host", "Hostname", "Port", "Protocol", "Service", "Product", "Version",
+                "CVE", "Severity", "CVSS", "Match / fix", "Status", "Description",
+                "Remediation", "References", "CWE"])
+    findings = db.query(Finding).filter(Finding.scan_id == scan.id).all()
+    findings.sort(key=lambda f: (_SEV_RANK.get(f.severity, 0), f.cvss_score or 0), reverse=True)
     cve_cache = {}
     for f in findings:
         svc = db.get(Service, f.service_id)
@@ -85,59 +125,13 @@ def build_findings_csv(db: Session, scan: Scan) -> str:
         if f.cve_id not in cve_cache:
             cve_cache[f.cve_id] = db.query(CVE).filter(CVE.cve_id == f.cve_id).first()
         cve = cve_cache[f.cve_id]
-        writer.writerow([
-            "SERVER/CVE",
-            host.address if host else "",
-            host.hostname if host else "",
-            svc.port if svc else "",
-            svc.protocol if svc else "",
-            svc.service_name if svc else "",
-            svc.product if svc else "",
-            svc.version if svc else "",
-            f.cve_id,
-            f.severity,
-            f.cvss_score if f.cvss_score is not None else "",
-            f.match_confidence,
-            f.match_reason,
-            f.status,
-            (cve.description if cve else "").replace("\n", " "),
-            (cve.remediation if cve else "").replace("\n", " "),
-            (cve.references if cve else "").replace("\n", "; "),
-            cve.cwe if cve else "",
-        ])
-
-    # ---- Web / URL penetration test findings ----
-    web: List[WebFinding] = db.query(WebFinding).filter(WebFinding.scan_id == scan.id).all()
-    for w in web:
-        writer.writerow([
-            "WEB",
-            w.target_url, "", "", "", w.category, "", "",
-            w.cve_id or w.name,
-            w.severity,
-            w.cvss_score if w.cvss_score is not None else "",
-            "", (w.evidence or "").replace("\n", " "),
-            w.status,
-            (w.description or "").replace("\n", " "),
-            (w.remediation or "").replace("\n", " "),
-            (w.references or "").replace("\n", "; "),
-            "",
-        ])
-
-    # ---- CIS benchmark / hardening findings ----
-    cfg: List[ConfigFinding] = db.query(ConfigFinding).filter(
-        ConfigFinding.scan_id == scan.id).all()
-    sev_rank = {"CRITICAL": 5, "HIGH": 4, "MEDIUM": 3, "LOW": 2, "INFO": 1}
-    cfg.sort(key=lambda c: (c.status == "fail", sev_rank.get(c.severity, 0)), reverse=True)
-    for c in cfg:
-        if c.check_id == "audit-summary":
-            continue
-        writer.writerow([
-            "CIS/HARDENING", c.host, "", "", "", "Hardening", "", "",
-            c.title, c.severity,
-            "", "", (c.evidence or "").replace("\n", " "),
-            c.status,
-            (c.detail or "").replace("\n", " "),
-            (c.remediation or "").replace("\n", " "),
-            "", c.check_id,
+        w.writerow([
+            host.address if host else "", host.hostname if host else "",
+            svc.port if svc else "", svc.protocol if svc else "",
+            svc.service_name if svc else "", svc.product if svc else "",
+            svc.version if svc else "", f.cve_id, f.severity,
+            f.cvss_score if f.cvss_score is not None else "", _nl(f.match_reason), f.status,
+            _nl(cve.description if cve else ""), _nl(cve.remediation if cve else ""),
+            (cve.references if cve else "").replace("\n", "; "), cve.cwe if cve else "",
         ])
     return out.getvalue()

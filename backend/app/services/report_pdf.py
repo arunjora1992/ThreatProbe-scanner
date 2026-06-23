@@ -93,11 +93,19 @@ def build_findings_pdf(db: Session, scan: Scan) -> bytes:
     story = []
 
     target = scan.target
+    stype = scan.scan_type
+    is_cis = stype == "cis_benchmark"
+    is_web = stype in ("web", "zap_passive", "zap_active")
+    is_net = stype in ("discovery", "port", "full", "custom")
     findings: List[Finding] = db.query(Finding).filter(Finding.scan_id == scan.id).all()
     hosts: List[Host] = db.query(Host).filter(Host.scan_id == scan.id).all()
+    web_all: List[WebFinding] = db.query(WebFinding).filter(WebFinding.scan_id == scan.id).all()
+
+    titles = {"cis_benchmark": "CIS Benchmark / Hardening Report"}
+    report_title = titles.get(stype, "Vulnerability Assessment Report")
 
     # ---- Title ----
-    story.append(Paragraph("Vulnerability Assessment Report", ss["H1c"]))
+    story.append(Paragraph(report_title, ss["H1c"]))
     story.append(Paragraph("Air-Gapped Penetration Testing Platform", ss["Sub"]))
     story.append(Spacer(1, 0.6 * cm))
 
@@ -105,14 +113,16 @@ def build_findings_pdf(db: Session, scan: Scan) -> bytes:
         ["Target", f"{target.name} ({target.address})"],
         ["Scan ID", str(scan.id)],
         ["Scan type", scan.scan_type],
-        ["nmap profile", scan.profile or "-"],
+        ["Profile", scan.profile or "-"],
         ["Status", scan.status],
         ["Started", str(scan.started_at or "-")],
         ["Finished", str(scan.finished_at or "-")],
         ["Operator", scan.created_by or "-"],
-        ["Hosts discovered", str(len(hosts))],
-        ["Total findings", str(len(findings))],
     ]
+    if is_net or stype == "credentialed":
+        meta.append(["Hosts discovered", str(len(hosts))])
+    if not is_cis:
+        meta.append(["Total findings", str(len(findings) + len(web_all))])
     t = Table(meta, colWidths=[4 * cm, 13 * cm])
     t.setStyle(TableStyle([
         ("FONTSIZE", (0, 0), (-1, -1), 9),
@@ -126,74 +136,78 @@ def build_findings_pdf(db: Session, scan: Scan) -> bytes:
     story.append(t)
     story.append(Spacer(1, 0.6 * cm))
 
-    # ---- Executive summary ----
-    story.append(Paragraph("Executive Summary", ss["Heading2"]))
-    counts = Counter(f.severity for f in findings)
-    summary_rows = [["Severity", "Count"]]
-    for sev in SEVERITY_ORDER:
-        if counts.get(sev):
-            summary_rows.append([sev, str(counts[sev])])
-    if len(summary_rows) == 1:
-        summary_rows.append(["No findings", "0"])
-    st = Table(summary_rows, colWidths=[6 * cm, 4 * cm])
-    style = [
-        ("FONTSIZE", (0, 0), (-1, -1), 9),
-        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#dddddd")),
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2c3e50")),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-    ]
-    for i, row in enumerate(summary_rows[1:], start=1):
-        c = SEVERITY_COLORS.get(row[0], colors.grey)
-        style.append(("TEXTCOLOR", (0, i), (0, i), c))
-        style.append(("FONTNAME", (0, i), (0, i), "Helvetica-Bold"))
-    st.setStyle(TableStyle(style))
-    # Severity pie chart beside the table (only when there are findings).
-    if findings:
-        pie_pairs = [(s, counts[s]) for s in SEVERITY_ORDER if counts.get(s)]
-        pie = _pie(pie_pairs, [SEVERITY_COLORS.get(s, colors.grey) for s, _ in pie_pairs])
-        combo = Table([[st, pie]], colWidths=[10 * cm, 7 * cm])
-        combo.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE")]))
-        story.append(combo)
-    else:
-        story.append(st)
+    # ---- Executive summary (skipped for CIS — its section has pass/fail + score) ----
+    if not is_cis:
+        # Count the findings relevant to this scan type (web findings for web/zap scans).
+        _primary = web_all if is_web else findings
+        story.append(Paragraph("Executive Summary", ss["Heading2"]))
+        counts = Counter(f.severity for f in _primary)
+        summary_rows = [["Severity", "Count"]]
+        for sev in SEVERITY_ORDER + ["INFO"]:
+            if counts.get(sev):
+                summary_rows.append([sev, str(counts[sev])])
+        if len(summary_rows) == 1:
+            summary_rows.append(["No findings", "0"])
+        st = Table(summary_rows, colWidths=[6 * cm, 4 * cm])
+        style = [
+            ("FONTSIZE", (0, 0), (-1, -1), 9),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#dddddd")),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2c3e50")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ]
+        for i, row in enumerate(summary_rows[1:], start=1):
+            c = SEVERITY_COLORS.get(row[0], colors.grey)
+            style.append(("TEXTCOLOR", (0, i), (0, i), c))
+            style.append(("FONTNAME", (0, i), (0, i), "Helvetica-Bold"))
+        st.setStyle(TableStyle(style))
+        if _primary:
+            pie_pairs = [(s, counts[s]) for s in SEVERITY_ORDER + ["INFO"] if counts.get(s)]
+            pie = _pie(pie_pairs, [SEVERITY_COLORS.get(s, colors.grey) for s, _ in pie_pairs])
+            combo = Table([[st, pie]], colWidths=[10 * cm, 7 * cm])
+            combo.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE")]))
+            story.append(combo)
+        else:
+            story.append(st)
+        story.append(Spacer(1, 0.5 * cm))
+
+    # ---- Host inventory (network scans, and credentialed for host/OS context) ----
+    if (is_net or stype == "credentialed") and hosts:
+        story.append(Paragraph("Host & Service Inventory", ss["Heading2"]))
+        inv_rows = [["Host", "Hostname", "OS", "Open services"]]
+        for h in hosts:
+            svcs = db.query(Service).filter(Service.host_id == h.id).all()
+            svc_str = ", ".join(
+                f"{s.port}/{s.protocol} {s.service_name}".strip()
+                for s in svcs[:25] if s.protocol != "pkg") or "none"
+            inv_rows.append([
+                Paragraph(h.address, ss["CellSmall"]),
+                Paragraph(h.hostname or "-", ss["CellSmall"]),
+                Paragraph(h.os_guess or "-", ss["CellSmall"]),
+                Paragraph(svc_str, ss["CellSmall"]),
+            ])
+        inv = Table(inv_rows, colWidths=[3 * cm, 3.5 * cm, 4 * cm, 6.5 * cm], repeatRows=1)
+        inv.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2c3e50")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, 0), 8),
+            ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#dddddd")),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#fafbfc")]),
+        ]))
+        story.append(inv)
     story.append(Spacer(1, 0.5 * cm))
 
-    # ---- Host inventory ----
-    story.append(Paragraph("Host & Service Inventory", ss["Heading2"]))
-    inv_rows = [["Host", "Hostname", "OS", "Open services"]]
-    for h in hosts:
-        svcs = db.query(Service).filter(Service.host_id == h.id).all()
-        svc_str = ", ".join(
-            f"{s.port}/{s.protocol} {s.service_name}".strip() for s in svcs[:25]
-        ) or "none"
-        inv_rows.append([
-            Paragraph(h.address, ss["CellSmall"]),
-            Paragraph(h.hostname or "-", ss["CellSmall"]),
-            Paragraph(h.os_guess or "-", ss["CellSmall"]),
-            Paragraph(svc_str, ss["CellSmall"]),
-        ])
-    inv = Table(inv_rows, colWidths=[3 * cm, 3.5 * cm, 4 * cm, 6.5 * cm], repeatRows=1)
-    inv.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2c3e50")),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 0), (-1, 0), 8),
-        ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#dddddd")),
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#fafbfc")]),
-    ]))
-    story.append(inv)
-    story.append(Spacer(1, 0.5 * cm))
-
-    # ---- Detailed findings ----
-    story.append(Paragraph("Detailed Findings", ss["Heading2"]))
+    # ---- Detailed CVE findings (network + credentialed package audits) ----
     sev_weight = {s: i for i, s in enumerate(reversed(SEVERITY_ORDER))}
     findings.sort(key=lambda f: (sev_weight.get(f.severity, 0), f.cvss_score or 0), reverse=True)
-
     cve_cache = {}
-    if not findings:
-        story.append(Paragraph("No vulnerabilities were correlated for this scan.", ss["Normal"]))
+    if is_net or stype == "credentialed":
+        story.append(Spacer(1, 0.3 * cm))
+        story.append(Paragraph("Detailed Findings", ss["Heading2"]))
+        if not findings:
+            story.append(Paragraph("No vulnerabilities were correlated for this scan.", ss["Normal"]))
 
     for f in findings:
         svc = db.get(Service, f.service_id)
