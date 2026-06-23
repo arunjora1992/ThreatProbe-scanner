@@ -119,7 +119,7 @@
   // ---------- routing (path-based, reflected in the browser URL) ----------
   const ROUTES = { dashboard: renderDashboard, targets: renderTargets, scans: renderScans,
                    schedules: renderSchedules, cves: renderCves, reports: renderReports,
-                   settings: renderSettings, users: renderUsers };
+                   settings: renderSettings, users: renderUsers, about: renderAbout };
 
   document.getElementById("nav").addEventListener("click", (e) => {
     const item = e.target.closest(".nav-item");
@@ -1327,6 +1327,65 @@
   };
 
   const errBox = (ex) => `<div class="card" style="border-color:var(--high)">⚠️ ${esc(ex.message || ex)}</div>`;
+
+  // ---------- About ----------
+  async function renderAbout() {
+    const name = (window._branding && window._branding.app_name) || "ThreatProbe Scanner";
+    view.innerHTML = `<div class="page-head"><h1>About</h1></div>` + loading();
+    let stats = {};
+    try { stats = await API.get("/api/dashboard/stats"); } catch {}
+    const feat = (icon, title, body) =>
+      `<div class="card about-feat"><div class="about-ic">${icon}</div><div><b>${title}</b><div class="muted small">${body}</div></div></div>`;
+    const scanType = (name, body) => `<tr><td><b>${esc(name)}</b></td><td class="small">${body}</td></tr>`;
+    view.innerHTML = `
+      <div class="page-head"><h1>About ${esc(name)}</h1></div>
+      <div class="card about-hero">
+        <div class="about-logo">${_logoHtml(window._branding || {}, 64)}</div>
+        <div>
+          <h2 style="margin:0 0 4px">${esc(name)}</h2>
+          <p class="muted">Air-gapped Vulnerability Assessment &amp; Penetration-Testing platform — a self-contained, dependency-light security scanner you can run fully offline.</p>
+          <div class="about-stats">
+            <span><b>${(stats.cves || 0).toLocaleString()}</b> CVEs</span>
+            <span><b>${stats.scans ?? 0}</b> scans</span>
+            <span><b>${stats.targets ?? 0}</b> targets</span>
+            <span><b>${stats.kev_findings ?? 0}</b> exploited (KEV)</span>
+          </div>
+        </div>
+      </div>
+
+      <h3 class="section-title">What it does</h3>
+      <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px">
+        ${feat("🌐", "Network &amp; server VA", "nmap discovery / port / version scans correlated against a local CVE database — no internet at scan time.")}
+        ${feat("🕸️", "Web app testing (OWASP ZAP)", "Spider + passive + active scans, with authenticated (form/JSON/bearer) and AJAX/SPA crawling for deep coverage.")}
+        ${feat("🔐", "Credentialed Linux audit", "SSH in, enumerate every package, map to CVEs with the exact fixed version — backport-aware via distro security feeds.")}
+        ${feat("🛡️", "CIS benchmark / hardening", "Official CIS profiles via OpenSCAP (auto-installed) with L1/L2 Server/Workstation levels, plus a built-in agentless fallback.")}
+        ${feat("🎯", "Risk prioritization", "CISA KEV (exploited-in-the-wild) flags + FIRST EPSS scores rank what to fix first — not just CVSS.")}
+        ${feat("🗓️", "Scheduling &amp; reports", "Recurring scheduled scans, live scan logs, per-type PDF/CSV reports with charts, and emailed reports.")}
+      </div>
+
+      <h3 class="section-title">Scan types</h3>
+      <div class="table-wrap"><table class="fixed">
+        <colgroup><col style="width:26%"><col style="width:74%"></colgroup>
+        <thead><tr><th>Type</th><th>Description</th></tr></thead>
+        <tbody>
+          ${scanType("Server VA (nmap)", "Open ports + service/version detection, then CVE correlation.")}
+          ${scanType("Host discovery / Port", "Ping sweep or open-port enumeration across IPs / CIDR pools.")}
+          ${scanType("Web app (ZAP)", "Passive or active OWASP ZAP scan; optional authenticated + AJAX/SPA crawl.")}
+          ${scanType("Credentialed Linux", "Authenticated package/CVE audit over SSH (backport-aware with distro feeds).")}
+          ${scanType("CIS benchmark", "OpenSCAP CIS profile (L1/L2 Server/Workstation) or built-in hardening checks.")}
+        </tbody></table></div>
+
+      <h3 class="section-title">Built for the real world</h3>
+      <div class="card">
+        <ul class="about-list">
+          <li>✅ Runs <b>100% offline / air-gapped</b> — one <code>docker compose up</code>; CVE feeds imported or exported between sites.</li>
+          <li>✅ Served over <b>HTTPS</b> (self-signed by default); credentials are used <b>in-memory only and never stored</b>.</li>
+          <li>✅ Role-based access (admin / operator / viewer), white-label branding, and stop-anytime scans.</li>
+          <li>✅ Threat-intel enrichment (KEV + EPSS) and distro-accurate matching (RHEL/CentOS/Oracle/Rocky, Ubuntu/Debian).</li>
+        </ul>
+        <p class="muted small" style="margin-top:10px">⚠ For authorized security testing only. Scan only systems you own or have explicit written permission to assess.</p>
+      </div>`;
+  }
 
   // ---------- branding (white-label app name + logo) ----------
   function _logoHtml(b, size) {

@@ -58,8 +58,13 @@ with vulnerability, severity, CVSS, and remediation details.
 - **Live scan log** — a shell-like, auto-scrolling terminal view per scan, streaming progress in real time (nmap output, ZAP spider/active stages, per-host SSH package correlation).
 - **Email reports** — SMTP is configured **in the GUI** (stored in the DB, not in files); email any scan's report with the severity summary in the body and PDF/CSV attached.
 - **Scheduled CVE updates** — opt-in auto-refresh of the CVE database every N hours (default 24), online from the NVD mirror or by re-importing the offline feed directory; controlled from the CVE Database page.
+- **Scheduled scans** — define **recurring scans** per target (every N hours) from the **Schedules** page; the backend auto-runs them. Credential-less scan types only (SSH/CIS need in-memory credentials that are never stored).
+- **Stop / cancel scans** — halt a running or queued scan from the GUI; the worker (nmap) and backend threads abort cooperatively and the scan is marked `cancelled`.
 - **Rescan** — one click on any scan re-runs the same scan type against the same target (re-prompting for SSH/web credentials, which are never stored).
-- **White-label branding** — set a custom **application name and logo** (emoji or an uploaded PNG/SVG) from **Settings → Branding**; applied to the login page, sidebar, and browser tab.
+- **Risk prioritization (KEV + EPSS)** — findings and the CVE browser are ranked by **CISA KEV** (actively-exploited) then **FIRST EPSS** likelihood, not just CVSS — so the riskiest items surface first (see below).
+- **CIS benchmark / hardening** — authenticated CIS audits via **OpenSCAP** (auto-installed on the target when missing) with selectable **Level 1/2 Server/Workstation** profiles, plus a built-in agentless fallback (see below).
+- **Modern dashboard** — severity donut, scan-status chart, and a **Top priorities** panel (exploited / high-risk findings).
+- **White-label branding** — set a custom **application name, logo, and favicon** (emoji or an uploaded PNG/SVG) from **Settings → Branding**; applied to the login page, sidebar, and browser tab. An in-app **About** page describes the tool.
 - **Dark / light theme** toggle (persisted per browser).
 
 ---
@@ -333,10 +338,13 @@ the same in-memory SSH credentials and is **agentless**: it installs nothing on 
 
 Two engines, auto-selected:
 
-- **OpenSCAP (optional, opportunistic)** — if the target already has `oscap` + SCAP
-  Security Guide content, the scan runs the **official CIS profile** and imports every
-  rule (CIS rule id, severity, pass/fail, remediation) plus a **compliance score**. We do
-  **not** require or install it — it's used only when present.
+- **OpenSCAP** — runs the **official CIS profile** and imports every rule (CIS rule id,
+  severity, pass/fail, remediation) plus a **compliance score**. If `oscap` + SCAP
+  Security Guide aren't present, the scan **auto-installs** them on the target
+  (`dnf`/`yum`/`apt`/`zypper`); if that fails (no root or no package mirror) it falls back
+  to the built-in checks. You choose the **profile/level** in the launch dialog — **Level 1
+  / Level 2**, **Server / Workstation** — and on RHEL clones (CentOS Stream / Rocky / Alma)
+  the matching SSG datastream is preferred so rules aren't all marked *notapplicable*.
 - **Built-in agentless checks (default fallback)** — when OpenSCAP isn't available, a set
   of read-only checks run from the scanner over SSH (reading configs, sysctls, perms):
   SSH config (root login, password/empty-password auth, X11), password policy
