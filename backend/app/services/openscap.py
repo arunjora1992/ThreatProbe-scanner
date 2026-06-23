@@ -42,6 +42,38 @@ def oscap_available(ex: Callable[[str], str]) -> bool:
     return "oscap" in ex("command -v oscap 2>/dev/null").strip()
 
 
+def ensure_installed(ex: Callable[[str], str], os_id: str, log=None) -> bool:
+    """Best-effort: install oscap + SSG content on the target if missing.
+
+    Honours the operator's request to auto-provision OpenSCAP. Needs root/sudo and a
+    working package source (repo/mirror); on an air-gapped host with no mirror the
+    install simply fails and the caller falls back to the built-in checks.
+    """
+    def _log(m):
+        if log:
+            log(m)
+    if oscap_available(ex):
+        return True
+    oid = (os_id or "").lower()
+    sudo = "" if ex("id -u 2>/dev/null").strip() == "0" else "sudo -n "
+    if oid in ("ubuntu", "debian"):
+        cmd = (f"{sudo}apt-get update -qq && {sudo}apt-get install -y "
+               f"openscap-scanner ssg-base ssg-debian ssg-debderived")
+    elif oid in ("sles", "opensuse-leap", "suse"):
+        cmd = f"{sudo}zypper --non-interactive install openscap-scanner scap-security-guide"
+    else:  # rhel / centos / rocky / alma / oracle / fedora
+        cmd = (f"{sudo}dnf install -y openscap-scanner scap-security-guide || "
+               f"{sudo}yum install -y openscap-scanner scap-security-guide")
+    _log("oscap not present — installing openscap-scanner + scap-security-guide…")
+    out = ex(cmd + " 2>&1 | tail -3")
+    if oscap_available(ex):
+        _log("OpenSCAP installed successfully.")
+        return True
+    _log("OpenSCAP install failed (need root/sudo + a package mirror); "
+         "falling back to built-in checks." + (f" [{out.strip()[:200]}]" if out.strip() else ""))
+    return False
+
+
 def find_datastream(ex: Callable[[str], str], os_id: str, version_id: str) -> str:
     """Pick the SSG datastream best matching the target OS, or '' if none found.
 
@@ -114,7 +146,9 @@ def parse_results(xml_text: str) -> "tuple[Optional[float], List[HardeningResult
     except ET.ParseError:
         return None, []
 
-    # Rule definitions: id -> (title, severity, fixtext)
+    # Rule definitions: id -> (title, severity, fixtext, description). With --results-arf
+    # the full benchmark (incl. fixtext/description) is embedded, so remediation is
+    # available; plain --results often omits fixtext.
     rules = {}
     for el in root.iter():
         if _localname(el.tag) != "Rule":
@@ -122,15 +156,23 @@ def parse_results(xml_text: str) -> "tuple[Optional[float], List[HardeningResult
         rid = el.get("id", "")
         if not rid:
             continue
-        title = severity = fixtext = ""
+        title = fixtext = fix = descr = rationale = ""
         severity = el.get("severity", "") or ""
         for child in el:
             ln = _localname(child.tag)
             if ln == "title" and not title:
-                title = "".join(child.itertext()).strip()
+                title = " ".join("".join(child.itertext()).split())
             elif ln == "fixtext" and not fixtext:
-                fixtext = "".join(child.itertext()).strip()
-        rules[rid] = (title, severity.lower(), fixtext)
+                fixtext = " ".join("".join(child.itertext()).split())
+            elif ln == "fix" and not fix:
+                fix = " ".join("".join(child.itertext()).split())
+            elif ln == "description" and not descr:
+                descr = " ".join("".join(child.itertext()).split())
+            elif ln == "rationale" and not rationale:
+                rationale = " ".join("".join(child.itertext()).split())
+        rules[rid] = {"title": title, "severity": severity.lower(),
+                      "remediation": fixtext or fix,
+                      "detail": descr or rationale or title}
 
     score = None
     results: List[HardeningResult] = []
@@ -152,8 +194,9 @@ def parse_results(xml_text: str) -> "tuple[Optional[float], List[HardeningResult
                 elif cln == "ident" and not ident:
                     ident = (child.text or "").strip()
             sev_attr = el.get("severity", "")
-            title, rsev, fixtext = rules.get(rid, ("", "", ""))
-            sev = _SEV_MAP.get((sev_attr or rsev or "unknown").lower(), "MEDIUM")
+            meta = rules.get(rid, {})
+            title = meta.get("title", "")
+            sev = _SEV_MAP.get((sev_attr or meta.get("severity") or "unknown").lower(), "MEDIUM")
             short = rid.split("content_rule_")[-1] if "content_rule_" in rid else rid
             if res == "fail":
                 status = "fail"
@@ -167,8 +210,8 @@ def parse_results(xml_text: str) -> "tuple[Optional[float], List[HardeningResult
             results.append(HardeningResult(
                 check_id=short[:64], title=(title or short)[:255],
                 severity=(sev if status == "fail" else "INFO"), status=status,
-                detail=(title or "")[:1000],
-                remediation=(fixtext[:1500] if status == "fail" else ""),
+                detail=(meta.get("detail") or title or "")[:1000],
+                remediation=(meta.get("remediation", "")[:2000] if status == "fail" else ""),
                 evidence=ident))
     return score, results
 
@@ -185,7 +228,10 @@ def run(ex: Callable[[str], str], os_id: str, version_id: str,
             log(m)
 
     if not oscap_available(ex):
-        return OpenScapResult(available=False, reason="`oscap` not found in PATH on the target")
+        # Try to provision it (operator opted into auto-install); else fall back.
+        if not ensure_installed(ex, os_id, log):
+            return OpenScapResult(available=False,
+                                  reason="oscap not installed and auto-install failed")
     ds = find_datastream(ex, os_id, version_id)
     if not ds:
         listing = ex(f"ls -1 {SSG_DIR}/*-ds.xml 2>/dev/null").strip()
@@ -203,7 +249,9 @@ def run(ex: Callable[[str], str], os_id: str, version_id: str,
     _log(f"OpenSCAP: evaluating profile {profile} (this can take a few minutes)…")
     # eval returns 0 (all pass) or 2 (some failed) on success; both are fine. Capture
     # stderr so a real error (not just 'some rules failed') can be surfaced.
-    err = ex(f"oscap xccdf eval --profile {profile} --results {_RESULTS_PATH} {ds} "
+    # --results-arf embeds the FULL benchmark (rule fixtext/description) alongside the
+    # results, so we can show remediation; plain --results often omits fixtext.
+    err = ex(f"oscap xccdf eval --profile {profile} --results-arf {_RESULTS_PATH} {ds} "
              f">/dev/null 2>{_RESULTS_PATH}.err; cat {_RESULTS_PATH}.err 2>/dev/null | head -5")
     xml_text = ex(f"cat {_RESULTS_PATH} 2>/dev/null")
     ex(f"rm -f {_RESULTS_PATH} {_RESULTS_PATH}.err 2>/dev/null; true")

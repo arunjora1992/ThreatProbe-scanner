@@ -11,6 +11,44 @@
   const statusBadge = (s) => `<span class="status-badge status-${esc(s)}">${esc(s)}</span>`;
   const fmtDate = (d) => d ? new Date(d).toLocaleString() : "—";
 
+  // ---------- inline SVG charts (framework-free, CSP-safe) ----------
+  const SEV_COLOR = { CRITICAL: "#7e1416", HIGH: "#c0392b", MEDIUM: "#e67e22",
+                      LOW: "#2980b9", INFO: "#7f8c8d", NONE: "#7f8c8d", UNKNOWN: "#7f8c8d" };
+  // Donut from segments [{value,color}], with a centre label. Pure SVG via stroke-dasharray.
+  function svgDonut(segments, centerTop, centerBot) {
+    const total = segments.reduce((a, s) => a + s.value, 0) || 1;
+    const R = 52, C = 2 * Math.PI * R;
+    let off = 0;
+    const rings = segments.filter(s => s.value > 0).map((s) => {
+      const len = (s.value / total) * C;
+      const seg = `<circle cx="70" cy="70" r="${R}" fill="none" stroke="${s.color}" stroke-width="16"
+        stroke-dasharray="${len.toFixed(2)} ${(C - len).toFixed(2)}" stroke-dashoffset="${(-off).toFixed(2)}"
+        transform="rotate(-90 70 70)"></circle>`;
+      off += len; return seg;
+    }).join("");
+    return `<svg width="140" height="140" viewBox="0 0 140 140" role="img">
+      <circle cx="70" cy="70" r="${R}" fill="none" stroke="var(--border)" stroke-width="16"></circle>
+      ${rings}
+      <text x="70" y="66" text-anchor="middle" font-size="26" font-weight="700" fill="currentColor">${esc(centerTop)}</text>
+      <text x="70" y="86" text-anchor="middle" font-size="11" fill="var(--muted)">${esc(centerBot || "")}</text>
+    </svg>`;
+  }
+  // Horizontal bar chart from items [{label,value,color}].
+  function svgBars(items) {
+    const max = Math.max(1, ...items.map(i => i.value));
+    return `<div class="bars">` + items.map((i) => `
+      <div class="bar-row"><span class="bar-lbl">${esc(i.label)}</span>
+        <span class="bar-track"><span class="bar-fill" style="width:${(i.value / max * 100).toFixed(1)}%;background:${i.color}"></span></span>
+        <span class="bar-val">${i.value}</span></div>`).join("") + `</div>`;
+  }
+  function chartCard(title, inner) {
+    return `<div class="card chart-card"><div class="muted small" style="margin-bottom:6px">${esc(title)}</div>${inner}</div>`;
+  }
+  function legend(items) {
+    return `<div class="legend">` + items.filter(i => i.value > 0).map((i) =>
+      `<span><i style="background:${i.color}"></i>${esc(i.label)} ${i.value}</span>`).join("") + `</div>`;
+  }
+
   function toast(msg, kind = "ok") {
     const t = document.getElementById("toast");
     t.textContent = msg;
@@ -498,6 +536,7 @@
             ${scan.error ? `<span class="k">Error</span><span style="color:#ff6b6b">${esc(scan.error)}</span>` : ""}
           </div>
         </div>
+        <div id="scan-charts" class="chart-row"></div>
         <h3 class="section-title">Live scan log <span id="log-live"></span></h3>
         <pre id="scan-console" class="console"></pre>
         ${showHosts ? `
@@ -530,6 +569,21 @@
 
       if (scan.scan_type === "cis_benchmark") ptLoadConfigFindings(scan.id);
       if (scan.scan_type === "credentialed") ptLoadPackages(scan.id);
+
+      // Severity charts for vulnerability findings (CIS gets its own charts on load).
+      if (scan.scan_type !== "cis_benchmark") {
+        const all = [...findings, ...webFindings];
+        const order = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"];
+        const counts = {}; all.forEach(f => { counts[f.severity] = (counts[f.severity] || 0) + 1; });
+        const segs = order.map(s => ({ label: s, value: counts[s] || 0, color: SEV_COLOR[s] }));
+        const box = document.getElementById("scan-charts");
+        if (box && all.length) {
+          box.innerHTML =
+            chartCard("Findings by severity",
+              `<div class="donut-wrap">${svgDonut(segs, String(all.length), "findings")}${legend(segs)}</div>`)
+            + chartCard("Severity distribution", svgBars(segs.filter(s => s.value > 0)));
+        }
+      }
 
       // Load the live log (and keep streaming it while the scan runs).
       logOffset = 0;
@@ -617,6 +671,27 @@
       }
       if (cnt) cnt.innerHTML = `· <b style="color:var(--high)">${data.fails} failed</b> of ${findings.length}`
         + (summary ? ` · <span class="muted">${esc(summary.detail)}</span>` : "");
+
+      // CIS charts: compliance-score donut + pass/fail + failed-by-severity.
+      const cbox = document.getElementById("scan-charts");
+      if (cbox) {
+        const passN = findings.filter(f => f.status === "pass").length;
+        const failN = findings.filter(f => f.status === "fail").length;
+        const scoreM = (summary && /score ([\d.]+)%/.exec(summary.detail || "")) || null;
+        const score = scoreM ? Math.round(parseFloat(scoreM[1])) : Math.round(passN / Math.max(1, passN + failN) * 100);
+        const pf = [{ label: "pass", value: passN, color: "#2e7d32" }, { label: "fail", value: failN, color: "#c0392b" }];
+        const order = ["HIGH", "MEDIUM", "LOW", "INFO"];
+        const fc = {}; findings.filter(f => f.status === "fail").forEach(f => { fc[f.severity] = (fc[f.severity] || 0) + 1; });
+        const sevSegs = order.map(s => ({ label: s, value: fc[s] || 0, color: SEV_COLOR[s] })).filter(s => s.value > 0);
+        cbox.innerHTML =
+          chartCard("CIS compliance score",
+            svgDonut([{ value: score, color: (score >= 80 ? "#2e7d32" : score >= 50 ? "#e67e22" : "#c0392b") },
+                      { value: 100 - score, color: "var(--border)" }], score + "%", "compliant"))
+          + chartCard("Controls pass / fail",
+            `<div class="donut-wrap">${svgDonut(pf, String(passN + failN), "controls")}${legend(pf)}</div>`)
+          + (sevSegs.length ? chartCard("Failed controls by severity", svgBars(sevSegs)) : "");
+      }
+
       const rows = findings.map((f) => {
         const st = f.status === "fail"
           ? sevBadge(f.severity)

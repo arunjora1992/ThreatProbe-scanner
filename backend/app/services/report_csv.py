@@ -5,7 +5,7 @@ from typing import List
 
 from sqlalchemy.orm import Session
 
-from ..models import CVE, Finding, Host, Package, Scan, Service, WebFinding
+from ..models import CVE, ConfigFinding, Finding, Host, Package, Scan, Service, WebFinding
 
 
 def build_consolidated_csv(data: dict) -> str:
@@ -121,5 +121,23 @@ def build_findings_csv(db: Session, scan: Scan) -> str:
             (w.remediation or "").replace("\n", " "),
             (w.references or "").replace("\n", "; "),
             "",
+        ])
+
+    # ---- CIS benchmark / hardening findings ----
+    cfg: List[ConfigFinding] = db.query(ConfigFinding).filter(
+        ConfigFinding.scan_id == scan.id).all()
+    sev_rank = {"CRITICAL": 5, "HIGH": 4, "MEDIUM": 3, "LOW": 2, "INFO": 1}
+    cfg.sort(key=lambda c: (c.status == "fail", sev_rank.get(c.severity, 0)), reverse=True)
+    for c in cfg:
+        if c.check_id == "audit-summary":
+            continue
+        writer.writerow([
+            "CIS/HARDENING", c.host, "", "", "", "Hardening", "", "",
+            c.title, c.severity,
+            "", "", (c.evidence or "").replace("\n", " "),
+            c.status,
+            (c.detail or "").replace("\n", " "),
+            (c.remediation or "").replace("\n", " "),
+            "", c.check_id,
         ])
     return out.getvalue()

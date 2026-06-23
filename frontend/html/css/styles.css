@@ -139,6 +139,20 @@ tbody tr:hover { background: var(--panel-2); }
 .status-queued { color: var(--low); border-color: var(--low); }
 .status-cancelled { color: var(--muted); border-color: var(--muted); }
 
+/* ---- scan charts ---- */
+.chart-row { display: flex; flex-wrap: wrap; gap: 14px; margin: 14px 0; }
+.chart-card { flex: 1 1 220px; min-width: 200px; }
+.donut-wrap { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.legend { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.legend span { display: flex; align-items: center; gap: 6px; }
+.legend i { width: 11px; height: 11px; border-radius: 2px; display: inline-block; }
+.bars { display: flex; flex-direction: column; gap: 6px; }
+.bar-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.bar-lbl { width: 74px; text-align: right; color: var(--muted); flex: none; }
+.bar-track { flex: 1; background: var(--bg-2); border-radius: 4px; height: 14px; overflow: hidden; }
+.bar-fill { display: block; height: 100%; border-radius: 4px; }
+.bar-val { width: 28px; flex: none; }
+
 /* ---- Forms ---- */
 .form-row { display: flex; flex-direction: column; gap: 5px; margin-bottom: 14px; }
 .form-row label { font-size: 13px; color: var(--muted); }

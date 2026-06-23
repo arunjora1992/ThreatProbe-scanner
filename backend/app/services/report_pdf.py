@@ -22,6 +22,8 @@ from reportlab.platypus import (
     Table,
     TableStyle,
 )
+from reportlab.graphics.shapes import Drawing
+from reportlab.graphics.charts.piecharts import Pie
 from xml.sax.saxutils import escape as _xml_escape
 
 
@@ -36,7 +38,27 @@ def Paragraph(text, style):
     return _RLParagraph(s, style)
 from sqlalchemy.orm import Session
 
-from ..models import CVE, Finding, Host, Scan, Service, WebFinding
+from ..models import CVE, ConfigFinding, Finding, Host, Scan, Service, WebFinding
+
+
+def _pie(pairs, color_list, width=200, height=130):
+    """Small pie chart Drawing from [(label, value), …] (zero-value slices dropped)."""
+    pairs = [(l, v) for l, v in pairs if v]
+    d = Drawing(width, height)
+    if not pairs:
+        return d
+    pie = Pie()
+    pie.x, pie.y, pie.width, pie.height = 20, 15, 100, 100
+    pie.data = [v for _, v in pairs]
+    pie.labels = [f"{l}: {v}" for l, v in pairs]
+    pie.slices.strokeWidth = 0.5
+    pie.slices.fontName = "Helvetica"
+    pie.slices.fontSize = 7
+    pie.sideLabels = True
+    for i, c in enumerate(color_list[:len(pairs)]):
+        pie.slices[i].fillColor = c
+    d.add(pie)
+    return d
 
 SEVERITY_COLORS = {
     "CRITICAL": colors.HexColor("#7e1416"),
@@ -126,7 +148,15 @@ def build_findings_pdf(db: Session, scan: Scan) -> bytes:
         style.append(("TEXTCOLOR", (0, i), (0, i), c))
         style.append(("FONTNAME", (0, i), (0, i), "Helvetica-Bold"))
     st.setStyle(TableStyle(style))
-    story.append(st)
+    # Severity pie chart beside the table (only when there are findings).
+    if findings:
+        pie_pairs = [(s, counts[s]) for s in SEVERITY_ORDER if counts.get(s)]
+        pie = _pie(pie_pairs, [SEVERITY_COLORS.get(s, colors.grey) for s, _ in pie_pairs])
+        combo = Table([[st, pie]], colWidths=[10 * cm, 7 * cm])
+        combo.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE")]))
+        story.append(combo)
+    else:
+        story.append(st)
     story.append(Spacer(1, 0.5 * cm))
 
     # ---- Host inventory ----
@@ -258,6 +288,65 @@ def build_findings_pdf(db: Session, scan: Scan) -> bytes:
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
             ]))
             story.append(dt)
+
+    # ---- CIS benchmark / hardening findings ----
+    cfg: List[ConfigFinding] = db.query(ConfigFinding).filter(
+        ConfigFinding.scan_id == scan.id).all()
+    summary_row = next((c for c in cfg if c.check_id == "audit-summary"), None)
+    cfg = [c for c in cfg if c.check_id != "audit-summary"]
+    if cfg:
+        story.append(Spacer(1, 0.5 * cm))
+        story.append(Paragraph("CIS Benchmark / Hardening", ss["Heading2"]))
+        passes = [c for c in cfg if c.status == "pass"]
+        fails = [c for c in cfg if c.status == "fail"]
+        if summary_row and summary_row.detail:
+            story.append(Paragraph(summary_row.detail, ss["Sub"]))
+        story.append(Spacer(1, 0.2 * cm))
+        # pass/fail pie + counts
+        pf_pie = _pie([("Pass", len(passes)), ("Fail", len(fails))],
+                      [colors.HexColor("#2e7d32"), colors.HexColor("#c0392b")])
+        pf_tbl = Table([["Result", "Count"], ["Pass", str(len(passes))],
+                        ["Fail", str(len(fails))], ["Total checks", str(len(cfg))]],
+                       colWidths=[4 * cm, 3 * cm])
+        pf_tbl.setStyle(TableStyle([
+            ("FONTSIZE", (0, 0), (-1, -1), 9),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#dddddd")),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2c3e50")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("TEXTCOLOR", (0, 2), (0, 2), colors.HexColor("#c0392b")),
+        ]))
+        combo = Table([[pf_tbl, pf_pie]], colWidths=[8 * cm, 9 * cm])
+        combo.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE")]))
+        story.append(combo)
+        story.append(Spacer(1, 0.3 * cm))
+
+        # Failed controls with remediation (the actionable part).
+        sev_w = {s: i for i, s in enumerate(reversed(SEVERITY_ORDER))}
+        fails.sort(key=lambda c: sev_w.get(c.severity, 0), reverse=True)
+        story.append(Paragraph(f"Failed controls ({len(fails)})", ss["Heading3"]))
+        if not fails:
+            story.append(Paragraph("No failed controls — fully compliant with the profile.",
+                                   ss["Normal"]))
+        frows = [["Sev", "Control", "Remediation"]]
+        for c in fails:
+            frows.append([
+                Paragraph(c.severity, ss["CellSmall"]),
+                Paragraph(c.title or c.check_id, ss["CellSmall"]),
+                Paragraph((c.remediation or c.detail or "-"), ss["CellSmall"]),
+            ])
+        if len(frows) > 1:
+            ft = Table(frows, colWidths=[2 * cm, 6.5 * cm, 8.5 * cm], repeatRows=1)
+            ft.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2c3e50")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTSIZE", (0, 0), (-1, -1), 7),
+                ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#dddddd")),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#fafbfc")]),
+            ]))
+            story.append(ft)
 
     doc.build(story)
     return buf.getvalue()
