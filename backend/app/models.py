@@ -213,7 +213,8 @@ class Finding(Base):
     severity = Column(String(16), default="UNKNOWN", index=True)
     cvss_score = Column(Float, nullable=True)
     match_confidence = Column(String(16), default="medium")  # high|medium|low
-    match_reason = Column(String(255), default="")
+    # Free-form (host + package + multi-CVE remedy + caveats) — can exceed 255 chars.
+    match_reason = Column(Text, default="")
     status = Column(String(32), default="open", index=True)  # open|confirmed|false_positive|fixed|accepted
     notes = Column(Text, default="")
     created_at = Column(DateTime, default=datetime.utcnow)
