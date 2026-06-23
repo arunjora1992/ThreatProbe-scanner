@@ -53,6 +53,20 @@ class SmtpConfig(Base):
     updated_at = Column(DateTime, default=datetime.utcnow)
 
 
+class BrandingConfig(Base):
+    """White-label branding (single row, id=1): app name + logo, set in the GUI.
+
+    logo_data_url holds an uploaded logo as a data: URI (rendered via <img>, so even an
+    SVG can't execute script). When empty, the UI falls back to logo_emoji.
+    """
+    __tablename__ = "branding_config"
+    id = Column(Integer, primary_key=True)
+    app_name = Column(String(100), default="ThreatProbe Scanner")
+    logo_emoji = Column(String(16), default="🛡️")
+    logo_data_url = Column(Text, default="")
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+
 class CveUpdateConfig(Base):
     """Periodic CVE auto-update settings (single row, id=1), managed from the GUI."""
     __tablename__ = "cve_update_config"

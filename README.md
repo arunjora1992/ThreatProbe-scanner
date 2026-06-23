@@ -58,6 +58,8 @@ with vulnerability, severity, CVSS, and remediation details.
 - **Live scan log** — a shell-like, auto-scrolling terminal view per scan, streaming progress in real time (nmap output, ZAP spider/active stages, per-host SSH package correlation).
 - **Email reports** — SMTP is configured **in the GUI** (stored in the DB, not in files); email any scan's report with the severity summary in the body and PDF/CSV attached.
 - **Scheduled CVE updates** — opt-in auto-refresh of the CVE database every N hours (default 24), online from the NVD mirror or by re-importing the offline feed directory; controlled from the CVE Database page.
+- **Rescan** — one click on any scan re-runs the same scan type against the same target (re-prompting for SSH/web credentials, which are never stored).
+- **White-label branding** — set a custom **application name and logo** (emoji or an uploaded PNG/SVG) from **Settings → Branding**; applied to the login page, sidebar, and browser tab.
 - **Dark / light theme** toggle (persisted per browser).
 
 ---

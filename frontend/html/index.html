@@ -4,14 +4,14 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ThreatProbe Scanner</title>
-  <link rel="stylesheet" href="/css/styles.css?v=14" />
+  <link rel="stylesheet" href="/css/styles.css?v=15" />
 </head>
 <body>
   <!-- Login view -->
   <div id="login-view" class="login-wrap">
     <form id="login-form" class="login-card">
-      <div class="login-logo">🛡️</div>
-      <h1>ThreatProbe Scanner</h1>
+      <div class="login-logo" id="login-logo">🛡️</div>
+      <h1 id="login-title">ThreatProbe Scanner</h1>
       <p class="muted">Air-Gapped Vulnerability Assessment &amp; Penetration Testing</p>
       <input id="login-username" type="text" placeholder="Username" autocomplete="username" required />
       <input id="login-password" type="password" placeholder="Password" autocomplete="current-password" required />
@@ -24,7 +24,7 @@
   <!-- App shell -->
   <div id="app-view" class="hidden">
     <aside class="sidebar">
-      <div class="brand">🛡️ <span>ThreatProbe Scanner</span></div>
+      <div class="brand" id="brand">🛡️ <span>ThreatProbe Scanner</span></div>
       <nav id="nav">
         <a data-route="dashboard" class="nav-item active">📊 Dashboard</a>
         <a data-route="targets" class="nav-item">🎯 Targets</a>
@@ -58,7 +58,7 @@
     </div>
   </div>
 
-  <script src="/js/api.js?v=14"></script>
-  <script src="/js/app.js?v=14"></script>
+  <script src="/js/api.js?v=15"></script>
+  <script src="/js/app.js?v=15"></script>
 </body>
 </html>

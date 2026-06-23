@@ -211,6 +211,20 @@
   };
 
   // ---------- Launch scan ----------
+  // Re-run a scan: reopen the launch dialog for the same target, pre-selected to the
+  // same scan type. Credentials aren't stored, so SSH/ZAP scans re-prompt for them.
+  window.ptRescan = async (targetId, scanType) => {
+    try {
+      const t = await API.get(`/api/targets/${targetId}`);
+      ptScanTarget(t.id, t.name, t.address);
+      const sel = document.getElementById("s-type");
+      if (sel) {
+        // Only preselect if this scan type is offered in the dialog.
+        if ([...sel.options].some((o) => o.value === scanType)) sel.value = scanType;
+        ptToggleScanFields();
+      }
+    } catch (ex) { toast(ex.message, "err"); }
+  };
   window.ptScanTarget = (id, name, address) => {
     modal(`Launch scan — ${esc(name)}`, `
       <p class="muted small">Target: <code>${esc(address)}</code></p>
@@ -456,7 +470,8 @@
         <div class="page-head">
           <h1>Scan #${scan.id} <span class="muted" style="font-size:14px">${esc(scan.scan_type)}</span></h1>
           <div class="pill-row">
-            <button class="btn" onclick="route('scans')">← Back</button>
+            <button class="btn" onclick="ptRoute('scans')">← Back</button>
+            <button class="btn" onclick="ptRescan(${scan.target_id}, '${esc(scan.scan_type)}')">🔄 Rescan</button>
             <button class="btn btn-primary" onclick="ptDownload(${scan.id},'pdf')">⬇ PDF report</button>
             <button class="btn btn-primary" onclick="ptDownload(${scan.id},'csv')">⬇ CSV report</button>
             ${scan.scan_type === "credentialed" ? `<button class="btn" onclick="ptDownloadPkgs(${scan.id})">⬇ Package inventory CSV</button>` : ""}
@@ -948,11 +963,25 @@
 
   // ---------- Settings (SMTP / email) ----------
   async function renderSettings() {
-    view.innerHTML = `<div class="page-head"><h1>Email / SMTP Settings</h1></div>` + loading();
+    view.innerHTML = `<div class="page-head"><h1>Settings</h1></div>` + loading();
     try {
-      const c = await API.get("/api/settings/smtp");
+      const [c, b] = await Promise.all([API.get("/api/settings/smtp"), API.get("/api/branding")]);
       view.innerHTML = `
-        <div class="page-head"><h1>Email / SMTP Settings</h1></div>
+        <div class="page-head"><h1>Settings</h1></div>
+        <div class="card" style="max-width:620px;margin-bottom:18px">
+          <h3 class="section-title" style="margin-top:0">Branding</h3>
+          <p class="muted small" style="margin-bottom:12px">Customize the application name and logo shown on the login page and sidebar (white-labelling).</p>
+          <div class="form-row"><label>Application name</label><input id="br-name" value="${esc(b.app_name)}" placeholder="ThreatProbe Scanner"></div>
+          <div class="form-row"><label>Logo emoji (used when no image is uploaded)</label><input id="br-emoji" value="${esc(b.logo_emoji)}" placeholder="🛡️" style="max-width:120px"></div>
+          <div class="form-row"><label>Logo image (PNG / SVG / JPG, ~512&nbsp;KB max)</label>
+            <input type="file" id="br-file" accept="image/png,image/svg+xml,image/jpeg" onchange="ptBrandPickLogo(this)"></div>
+          <div class="form-row"><label>Current logo</label>
+            <div id="br-preview" style="background:var(--bg-2);padding:10px;border-radius:8px">${b.logo_data_url ? `<img src="${esc(b.logo_data_url)}" style="height:48px">` : `<span style="font-size:40px">${esc(b.logo_emoji || "🛡️")}</span>`}</div></div>
+          <div class="pill-row">
+            <button class="btn btn-primary" onclick="ptSaveBranding()">Save branding</button>
+            <button class="btn" onclick="ptClearLogo()">Remove uploaded logo</button>
+          </div>
+        </div>
         <div class="card" style="max-width:620px">
           <p class="muted small" style="margin-bottom:12px">Configure SMTP here (stored in the database, not in files). Used to email scan reports with the findings summary in the body and PDF/CSV attached.</p>
           <div class="form-row"><label>SMTP host</label><input id="sm-host" value="${esc(c.host)}" placeholder="smtp.example.com"></div>
@@ -998,6 +1027,42 @@
     catch (ex) { toast(ex.message, "err"); }
   };
 
+  // ---------- Branding ----------
+  let _brandLogo = null;  // null = unchanged; "" = clear; data-URI = new logo
+  window.ptBrandPickLogo = (input) => {
+    const f = input.files && input.files[0];
+    if (!f) return;
+    if (f.size > 512 * 1024) { toast("Logo too large (max ~512 KB)", "err"); input.value = ""; return; }
+    const r = new FileReader();
+    r.onload = () => {
+      _brandLogo = r.result;  // data:image/...;base64,...
+      const p = document.getElementById("br-preview");
+      if (p) p.innerHTML = `<img src="${esc(_brandLogo)}" style="height:48px">`;
+    };
+    r.readAsDataURL(f);
+  };
+  window.ptClearLogo = () => {
+    _brandLogo = "";
+    const p = document.getElementById("br-preview");
+    const emoji = document.getElementById("br-emoji").value || "🛡️";
+    if (p) p.innerHTML = `<span style="font-size:40px">${esc(emoji)}</span>`;
+    toast("Logo will be removed on save");
+  };
+  window.ptSaveBranding = async () => {
+    const body = {
+      app_name: document.getElementById("br-name").value.trim() || "ThreatProbe Scanner",
+      logo_emoji: document.getElementById("br-emoji").value.trim() || "🛡️",
+    };
+    if (_brandLogo !== null) body.logo_data_url = _brandLogo;  // only send when changed
+    try {
+      await API.put("/api/branding", body);
+      _brandLogo = null;
+      await ptApplyBranding();   // re-apply live (sidebar/title update immediately)
+      toast("Branding saved");
+      renderSettings();
+    } catch (ex) { toast(ex.message, "err"); }
+  };
+
   // ---------- Users ----------
   async function renderUsers() {
     view.innerHTML = `<div class="page-head"><h1>Users</h1>
@@ -1040,6 +1105,27 @@
 
   const errBox = (ex) => `<div class="card" style="border-color:var(--high)">⚠️ ${esc(ex.message || ex)}</div>`;
 
+  // ---------- branding (white-label app name + logo) ----------
+  function _logoHtml(b, size) {
+    return b.logo_data_url
+      ? `<img src="${esc(b.logo_data_url)}" alt="logo" style="height:${size}px;width:auto;vertical-align:middle">`
+      : esc(b.logo_emoji || "🛡️");
+  }
+  async function applyBranding() {
+    try {
+      const b = await API.get("/api/branding");
+      const name = b.app_name || "ThreatProbe Scanner";
+      document.title = name;
+      const lt = document.getElementById("login-title"); if (lt) lt.textContent = name;
+      const ll = document.getElementById("login-logo"); if (ll) ll.innerHTML = _logoHtml(b, 56);
+      const br = document.getElementById("brand");
+      if (br) br.innerHTML = `${_logoHtml(b, 24)} <span>${esc(name)}</span>`;
+      window._branding = b;
+    } catch { /* keep static defaults if branding can't load */ }
+  }
+  window.ptApplyBranding = applyBranding;
+
   // ---------- boot ----------
+  applyBranding();
   if (API.token()) showApp(); else showLogin();
 })();
