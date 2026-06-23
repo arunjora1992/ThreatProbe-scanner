@@ -198,15 +198,63 @@ def run(ex: Callable[[str], str], os_id: str, version_id: str,
     # eval returns 0 (all pass) or 2 (some failed) on success; both are fine. Capture
     # stderr so a real error (not just 'some rules failed') can be surfaced.
     err = ex(f"oscap xccdf eval --profile {profile} --results {_RESULTS_PATH} {ds} "
-             f">/dev/null 2>{_RESULTS_PATH}.err; cat {_RESULTS_PATH}.err 2>/dev/null | head -3")
+             f">/dev/null 2>{_RESULTS_PATH}.err; cat {_RESULTS_PATH}.err 2>/dev/null | head -5")
     xml_text = ex(f"cat {_RESULTS_PATH} 2>/dev/null")
     ex(f"rm -f {_RESULTS_PATH} {_RESULTS_PATH}.err 2>/dev/null; true")
     if not xml_text.strip():
-        reason = "oscap produced no results" + (f": {err.strip()[:200]}" if err.strip() else "")
+        reason = "oscap produced no results file" + (f": {err.strip()[:300]}" if err.strip() else "")
         _log(f"OpenSCAP: {reason}")
         return OpenScapResult(available=False, reason=reason)
     score, results = parse_results(xml_text)
     if not results:
-        return OpenScapResult(available=False, reason="oscap results XML had no rule outcomes")
+        # ET found no rule-results. If the raw doc actually contains them it's a
+        # parser/namespace issue — recover with a regex fallback; otherwise oscap errored
+        # (surface its stderr + the raw rule-result count to diagnose).
+        rr_count = xml_text.count("rule-result")
+        if rr_count:
+            results = _parse_results_regex(xml_text)
+            score = score if score is not None else _score_regex(xml_text)
+        if not results:
+            reason = (f"oscap ran but no rule outcomes parsed (rule-result tags in file: "
+                      f"{rr_count}; results bytes: {len(xml_text)})"
+                      + (f"; stderr: {err.strip()[:300]}" if err.strip() else ""))
+            _log(f"OpenSCAP: {reason}")
+            return OpenScapResult(available=False, reason=reason)
     return OpenScapResult(available=True, profile=profile, datastream=ds.rsplit("/", 1)[-1],
                           score=score, results=results)
+
+
+def _parse_results_regex(xml_text: str) -> List[HardeningResult]:
+    """Fallback: pull rule-results straight out of the raw XML (namespace/structure-proof).
+
+    The char classes include ':' so namespace-prefixed tags (e.g. <ns2:rule-result>) match.
+    """
+    out = []
+    rr = re.compile(r"<[\w.:-]*rule-result\b([^>]*)>(.*?)</[\w.:-]*rule-result>", re.S)
+    res_re = re.compile(r"<[\w.:-]*result\b[^>]*>\s*([^<\s]+)", re.S)
+    id_re = re.compile(r'idref="([^"]+)"')
+    sev_re = re.compile(r'severity="([^"]+)"')
+    for m in rr.finditer(xml_text):
+        attrs, body = m.group(1), m.group(2)
+        idm = id_re.search(attrs)
+        rid = idm.group(1) if idm else ""
+        rm = res_re.search(body)
+        res = rm.group(1).strip().lower() if rm else ""
+        if res not in ("pass", "fail", "error"):
+            continue
+        sevm = sev_re.search(attrs)
+        sev = _SEV_MAP.get((sevm.group(1).lower() if sevm else "unknown"), "MEDIUM")
+        short = rid.split("content_rule_")[-1] if "content_rule_" in rid else rid
+        out.append(HardeningResult(
+            check_id=short[:64], title=short[:255],
+            severity=(sev if res == "fail" else "INFO"), status=res,
+            detail="", remediation="", evidence=""))
+    return out
+
+
+def _score_regex(xml_text: str) -> Optional[float]:
+    m = re.search(r"<[\w.:-]*score\b[^>]*>\s*([\d.]+)", xml_text)
+    try:
+        return float(m.group(1)) if m else None
+    except ValueError:
+        return None
