@@ -127,6 +127,8 @@ class FindingOut(BaseModel):
     status: str
     notes: str
     created_at: datetime
+    # Affected package (credentialed scans) or service/product (network scans).
+    package: str = ""
 
 
 class FindingUpdate(BaseModel):

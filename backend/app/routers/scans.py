@@ -148,6 +148,13 @@ def scan_findings(scan_id: int, severity: str | None = None, db: Session = Depen
     sev_order = {"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1}
     findings = q.all()
     findings.sort(key=lambda f: (sev_order.get(f.severity, 0), f.cvss_score or 0), reverse=True)
+    # Surface the affected package / service name (from the linked Service) so the GUI
+    # can show it as its own column. For credentialed scans this is the package name;
+    # for network scans it's the product/service. Set as a transient attribute that
+    # FindingOut (from_attributes) picks up.
+    for f in findings:
+        svc = f.service
+        f.package = (svc.product or svc.service_name or "") if svc else ""
     return findings
 
 

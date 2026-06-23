@@ -397,6 +397,7 @@
       const findRows = findings.slice(0, FIND_CAP).map((f) => `
         <tr>
           <td class="nowrap"><a onclick="ptViewCve('${esc(f.cve_id)}')">${esc(f.cve_id)}</a></td>
+          <td>${esc(f.package || "—")}</td>
           <td>${sevBadge(f.severity)}</td>
           <td>${f.cvss_score ?? "—"}</td>
           <td>${esc(f.match_confidence)}<br><span class="muted small">${esc(f.match_reason)}</span></td>
@@ -406,7 +407,7 @@
                 `<option ${f.status===s?"selected":""}>${s}</option>`).join("")}
             </select>
           </td></tr>`).join("") ||
-        `<tr><td colspan="5" class="empty">No CVE findings correlated.</td></tr>`;
+        `<tr><td colspan="6" class="empty">No CVE findings correlated.</td></tr>`;
 
       const webRows = webFindings.map((w) => `
         <tr>
@@ -478,8 +479,8 @@
         <h3 class="section-title">CVE findings (${findings.length})</h3>
         ${findings.length > FIND_CAP ? `<p class="muted small">Showing first ${FIND_CAP}. Use the Reports page or CSV export for the full set.</p>` : ""}
         <div class="table-wrap"><table class="fixed">
-          <colgroup><col style="width:16%"><col style="width:11%"><col style="width:8%"><col style="width:50%"><col style="width:15%"></colgroup>
-          <thead><tr><th>CVE</th><th>Severity</th><th>CVSS</th><th>Match / fix</th><th>Status</th></tr></thead>
+          <colgroup><col style="width:15%"><col style="width:14%"><col style="width:10%"><col style="width:7%"><col style="width:39%"><col style="width:15%"></colgroup>
+          <thead><tr><th>CVE</th><th>Package / service</th><th>Severity</th><th>CVSS</th><th>Match / fix</th><th>Status</th></tr></thead>
           <tbody>${findRows}</tbody></table></div>
         <h3 class="section-title">Web / URL findings (${webFindings.length})</h3>
         <div class="table-wrap"><table class="fixed">
