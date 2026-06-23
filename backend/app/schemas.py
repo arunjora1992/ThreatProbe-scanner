@@ -129,6 +129,9 @@ class FindingOut(BaseModel):
     created_at: datetime
     # Affected package (credentialed scans) or service/product (network scans).
     package: str = ""
+    # Threat-intel enrichment (from the linked CVE) for prioritization.
+    kev: bool = False
+    epss_score: Optional[float] = None
 
 
 class FindingUpdate(BaseModel):
@@ -156,6 +159,10 @@ class CVEOut(BaseModel):
     references: str
     remediation: str
     cwe: str
+    kev: bool = False
+    kev_date: Optional[datetime] = None
+    epss_score: Optional[float] = None
+    epss_percentile: Optional[float] = None
 
 
 class CVEImportResult(BaseModel):

@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 
 from ..auth import get_current_user
 from ..database import get_db
-from ..models import Finding, Host, Package, Scan, Service, Target, User, WebFinding
+from ..models import CVE, Finding, Host, Package, Scan, Service, Target, User, WebFinding
 from ..schemas import (
     FindingOut,
     HostOut,
@@ -147,14 +147,20 @@ def scan_findings(scan_id: int, severity: str | None = None, db: Session = Depen
         q = q.filter(Finding.severity == severity.upper())
     sev_order = {"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1}
     findings = q.all()
-    findings.sort(key=lambda f: (sev_order.get(f.severity, 0), f.cvss_score or 0), reverse=True)
-    # Surface the affected package / service name (from the linked Service) so the GUI
-    # can show it as its own column. For credentialed scans this is the package name;
-    # for network scans it's the product/service. Set as a transient attribute that
-    # FindingOut (from_attributes) picks up.
+    # Enrich with the affected package/service name and the linked CVE's threat-intel
+    # (KEV / EPSS) so the GUI can show + prioritise on them. Set as transient attributes
+    # that FindingOut (from_attributes) picks up.
+    cve_ids = {f.cve_id for f in findings}
+    intel = {c.cve_id: c for c in db.query(CVE).filter(CVE.cve_id.in_(cve_ids)).all()} if cve_ids else {}
     for f in findings:
         svc = f.service
         f.package = (svc.product or svc.service_name or "") if svc else ""
+        c = intel.get(f.cve_id)
+        f.kev = bool(c.kev) if c else False
+        f.epss_score = c.epss_score if c else None
+    # Risk-based ordering: actively-exploited (KEV) first, then severity, EPSS, CVSS.
+    findings.sort(key=lambda f: (1 if f.kev else 0, sev_order.get(f.severity, 0),
+                                 f.epss_score or 0, f.cvss_score or 0), reverse=True)
     return findings
 
 

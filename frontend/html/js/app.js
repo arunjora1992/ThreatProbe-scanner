@@ -396,10 +396,11 @@
       const FIND_CAP = 300;
       const findRows = findings.slice(0, FIND_CAP).map((f) => `
         <tr>
-          <td class="nowrap"><a onclick="ptViewCve('${esc(f.cve_id)}')">${esc(f.cve_id)}</a></td>
+          <td class="nowrap"><a onclick="ptViewCve('${esc(f.cve_id)}')">${esc(f.cve_id)}</a>${f.kev ? ' <span class="sev-badge sev-critical" title="CISA Known Exploited Vulnerability — actively exploited">KEV</span>' : ""}</td>
           <td>${esc(f.package || "—")}</td>
           <td>${sevBadge(f.severity)}</td>
           <td>${f.cvss_score ?? "—"}</td>
+          <td class="nowrap small">${f.epss_score != null ? (f.epss_score * 100).toFixed(1) + "%" : "—"}</td>
           <td>${esc(f.match_confidence)}<br><span class="muted small">${esc(f.match_reason)}</span></td>
           <td>
             <select class="btn-sm" onchange="ptSetFindingStatus(${f.id}, this.value)">
@@ -407,7 +408,7 @@
                 `<option ${f.status===s?"selected":""}>${s}</option>`).join("")}
             </select>
           </td></tr>`).join("") ||
-        `<tr><td colspan="6" class="empty">No CVE findings correlated.</td></tr>`;
+        `<tr><td colspan="7" class="empty">No CVE findings correlated.</td></tr>`;
 
       const webRows = webFindings.map((w) => `
         <tr>
@@ -479,8 +480,8 @@
         <h3 class="section-title">CVE findings (${findings.length})</h3>
         ${findings.length > FIND_CAP ? `<p class="muted small">Showing first ${FIND_CAP}. Use the Reports page or CSV export for the full set.</p>` : ""}
         <div class="table-wrap"><table class="fixed">
-          <colgroup><col style="width:15%"><col style="width:14%"><col style="width:10%"><col style="width:7%"><col style="width:39%"><col style="width:15%"></colgroup>
-          <thead><tr><th>CVE</th><th>Package / service</th><th>Severity</th><th>CVSS</th><th>Match / fix</th><th>Status</th></tr></thead>
+          <colgroup><col style="width:15%"><col style="width:13%"><col style="width:9%"><col style="width:6%"><col style="width:6%"><col style="width:36%"><col style="width:15%"></colgroup>
+          <thead><tr><th>CVE</th><th>Package / service</th><th>Severity</th><th>CVSS</th><th title="EPSS: probability of exploitation in next 30 days">EPSS</th><th>Match / fix</th><th>Status</th></tr></thead>
           <tbody>${findRows}</tbody></table></div>
         <h3 class="section-title">Web / URL findings (${webFindings.length})</h3>
         <div class="table-wrap"><table class="fixed">
@@ -603,6 +604,7 @@
         <button class="btn" onclick="ptExportCveDb()">⬇ Download CVE DB</button>
         <button class="btn admin-only" onclick="document.getElementById('cve-upload-file').click()">⬆ Upload CVE DB</button>
         <button class="btn btn-primary admin-only" onclick="ptImportFeeds()">⬆ Import NVD feeds</button>
+        <button class="btn admin-only" onclick="ptImportThreatIntel()" title="Enrich CVEs with CISA KEV (exploited-in-the-wild) + FIRST EPSS scores">🎯 Import KEV / EPSS</button>
         <input type="file" id="cve-upload-file" accept=".json,.gz,.json.gz,.json.xz" style="display:none" onchange="ptUploadCveDb(this)">
       </div></div>`
       + `<div class="toolbar">
@@ -630,6 +632,7 @@
             <option value="CWE-269">Improper Privilege Mgmt · CWE-269</option>
             <option value="CWE-20">Improper Input Validation · CWE-20</option>
           </select>
+          <label class="muted small" style="display:inline-flex;align-items:center;gap:4px"><input type="checkbox" id="cve-kev" style="width:auto"> 🎯 Exploited (KEV) only</label>
           <button class="btn btn-primary" onclick="ptSearchCves()">Search</button>
           <span id="cve-count" class="muted small"></span>
         </div>
@@ -642,6 +645,7 @@
     document.getElementById("cve-product").addEventListener("keydown", (e) => { if (e.key === "Enter") ptSearchCves(); });
     document.getElementById("cve-sev").addEventListener("change", ptSearchCves);
     document.getElementById("cve-cwe").addEventListener("change", ptSearchCves);
+    document.getElementById("cve-kev").addEventListener("change", ptSearchCves);
     try {
       const c = await API.get("/api/cves/count");
       document.getElementById("cve-count").textContent = `${c.total} CVEs in local database`;
@@ -713,18 +717,20 @@
       if (product) params.set("product", product);
       if (sev) params.set("severity", sev);
       if (cwe) params.set("cwe", cwe);
+      if (document.getElementById("cve-kev").checked) params.set("kev_only", "true");
       params.set("limit", "200");
       const cves = await API.get("/api/cves?" + params.toString());
       const rows = cves.map((c) => `
         <tr onclick="ptViewCve('${esc(c.cve_id)}')" style="cursor:pointer">
-          <td class="mono nowrap">${esc(c.cve_id)}</td>
+          <td class="mono nowrap">${esc(c.cve_id)}${c.kev ? ' <span class="sev-badge sev-critical" title="CISA Known Exploited Vulnerability">KEV</span>' : ""}</td>
           <td>${sevBadge(c.severity)}</td>
           <td>${c.cvss_v3_score ?? "—"}</td>
+          <td class="nowrap small">${c.epss_score != null ? (c.epss_score * 100).toFixed(1) + "%" : "—"}</td>
           <td class="nowrap small">${esc(c.cwe || "—")}</td>
-          <td>${esc((c.description || "").slice(0, 120))}…</td></tr>`).join("") ||
-        `<tr><td colspan="5" class="empty">No matching CVEs.</td></tr>`;
+          <td>${esc((c.description || "").slice(0, 110))}…</td></tr>`).join("") ||
+        `<tr><td colspan="6" class="empty">No matching CVEs.</td></tr>`;
       box.innerHTML = `<div class="table-wrap"><table>
-        <thead><tr><th>CVE</th><th>Severity</th><th>CVSS</th><th>Type (CWE)</th><th>Description</th></tr></thead>
+        <thead><tr><th>CVE</th><th>Severity</th><th>CVSS</th><th title="EPSS: probability of exploitation in next 30 days">EPSS</th><th>Type (CWE)</th><th>Description</th></tr></thead>
         <tbody>${rows}</tbody></table></div>`;
     } catch (ex) { box.innerHTML = errBox(ex); }
   };
@@ -751,6 +757,13 @@
       const r = await API.post("/api/cves/import");
       toast(r.message);
       renderCves();
+    } catch (ex) { toast(ex.message, "err"); }
+  };
+  window.ptImportThreatIntel = async () => {
+    toast("Importing KEV + EPSS from /data/cve_feeds … enriching existing CVEs");
+    try {
+      const r = await API.post("/api/cves/threat-intel/import");
+      toast(r.message || "Threat-intel imported");
     } catch (ex) { toast(ex.message, "err"); }
   };
   window.ptExportCveDb = () => {

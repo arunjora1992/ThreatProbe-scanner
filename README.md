@@ -416,6 +416,33 @@ year feeds — copy the **already-built** database straight across:
 This is the simplest way to seed an air-gapped install: the heavy NVD parsing was done
 once on the source side, so the target just loads finished records.
 
+### Threat-intel enrichment — KEV & EPSS (prioritization)
+
+CVSS tells you how *bad* a vulnerability is, not how *likely* it is to be exploited.
+The platform enriches the local CVE database with two industry threat-intel feeds so you
+triage on real-world risk:
+
+- **CISA KEV** (Known Exploited Vulnerabilities) — CVEs **actively exploited in the
+  wild**. These are flagged with a red **KEV** badge and sorted to the top.
+- **FIRST EPSS** (Exploit Prediction Scoring System) — the **probability (0–100%) a CVE
+  will be exploited in the next 30 days**, shown as its own column.
+
+Both are small, downloadable files (air-gap friendly). Drop them in `data/cve_feeds/`:
+
+```
+known_exploited_vulnerabilities.json   # https://www.cisa.gov/.../known_exploited_vulnerabilities.json
+epss_scores-current.csv.gz             # https://epss.cyentia.com/epss_scores-current.csv.gz
+```
+
+Then **CVE Database → 🎯 Import KEV / EPSS** (admin), or `POST /api/cves/threat-intel/import`
+(add `?online=true` on a connected host to fetch them directly). Enrichment only updates
+existing CVEs, so import NVD feeds first.
+
+Findings and the CVE browser are then **risk-ranked**: actively-exploited (KEV) first,
+then by EPSS likelihood, then severity/CVSS — so the CVE most likely to be used against
+you surfaces at the top instead of being buried among equal-CVSS entries. The CVE browser
+also has an **"Exploited (KEV) only"** filter.
+
 For each CVE the importer stores: ID, description, CVSS v3/v2 score and vector,
 derived severity, affected product CPEs, **structured affected version ranges**
 (`versionStart*/versionEnd*`, used for precise matching), references, CWE, and

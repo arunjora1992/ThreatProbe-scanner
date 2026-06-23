@@ -17,7 +17,7 @@ from ..database import get_db
 from ..models import CVE, User
 from ..schemas import CVEImportResult, CVEOut
 from ..services.cve_import import export_cves, import_feed_directory, import_single_file
-from ..services import cve_updater
+from ..services import cve_updater, threat_intel
 
 
 class UpdateConfigIn(BaseModel):
@@ -34,6 +34,8 @@ def search_cves(
     severity: str | None = None,
     product: str | None = Query(None, description="filter by affected product/package"),
     cwe: str | None = Query(None, description="filter by CWE id, e.g. CWE-79"),
+    kev_only: bool = Query(False, description="only CISA Known-Exploited (KEV) CVEs"),
+    sort: str = Query("risk", description="risk | cvss | epss"),
     limit: int = Query(100, le=1000),
     offset: int = 0,
     db: Session = Depends(get_db),
@@ -55,7 +57,27 @@ def search_cves(
     # Bug/vulnerability-type-wise: match the CWE id (e.g. CWE-79 = XSS).
     if cwe:
         query = query.filter(CVE.cwe.ilike(f"%{cwe}%"))
-    return query.order_by(CVE.cvss_v3_score.desc().nullslast()).offset(offset).limit(limit).all()
+    if kev_only:
+        query = query.filter(CVE.kev.is_(True))
+    if sort == "epss":
+        query = query.order_by(CVE.epss_score.desc().nullslast())
+    elif sort == "cvss":
+        query = query.order_by(CVE.cvss_v3_score.desc().nullslast())
+    else:  # "risk": actively-exploited first, then likelihood (EPSS), then severity (CVSS)
+        query = query.order_by(CVE.kev.desc(), CVE.epss_score.desc().nullslast(),
+                               CVE.cvss_v3_score.desc().nullslast())
+    return query.offset(offset).limit(limit).all()
+
+
+@router.post("/threat-intel/import")
+def import_threat_intel_feeds(online: bool = False, db: Session = Depends(get_db),
+                              _: User = Depends(require_admin)):
+    """Enrich existing CVEs with CISA KEV (exploited-in-the-wild) and FIRST EPSS scores.
+
+    Reads kev*.json / epss*.csv[.gz] from the feed directory, or fetches them online
+    when ?online=true. Run after importing NVD feeds.
+    """
+    return threat_intel.import_threat_intel(db, online=online)
 
 
 @router.get("/count")

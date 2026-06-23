@@ -151,6 +151,14 @@ class CVE(Base):
     references = Column(Text, default="")  # newline-separated URLs
     remediation = Column(Text, default="")  # guidance (derived/curated)
     cwe = Column(String(64), default="")
+    # Threat-intel enrichment (prioritization):
+    #  kev          - on CISA's Known Exploited Vulnerabilities catalog (actively exploited)
+    #  epss_score   - FIRST EPSS probability of exploitation in next 30 days (0..1)
+    #  epss_percentile - EPSS percentile rank (0..1)
+    kev = Column(Boolean, default=False, index=True)
+    kev_date = Column(DateTime, nullable=True)       # date added to KEV
+    epss_score = Column(Float, nullable=True, index=True)
+    epss_percentile = Column(Float, nullable=True)
 
 
 class Package(Base):
