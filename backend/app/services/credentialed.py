@@ -12,8 +12,8 @@ from datetime import datetime
 from typing import Optional
 
 from ..database import SessionLocal
-from ..models import Finding, Host, Package, Scan, Service
-from . import scanlog
+from ..models import CVE, Finding, Host, Package, Scan, Service
+from . import distro_feeds, scanlog
 from .cve_matcher import correlate_package, latest_fix_version
 from .scanner import expand_targets
 from .ssh_scanner import collect_host_facts
@@ -28,6 +28,41 @@ def _is_backported_pkg(name: str) -> bool:
     return n == "kernel" or n.startswith(("kernel-", "linux-image", "linux-headers"))
 
 
+# Vendor advisory severity words -> our scale (used when a distro CVE isn't in the NVD DB).
+_VENDOR_SEV = {
+    "critical": "CRITICAL", "important": "HIGH", "high": "HIGH",
+    "moderate": "MEDIUM", "medium": "MEDIUM", "low": "LOW", "negligible": "LOW",
+}
+
+
+def _distro_norm_matches(db, distro, release, manager, name, full_ver):
+    """Backport-aware matches from distro advisories, enriched with NVD severity/CVSS."""
+    dmatches = distro_feeds.correlate_distro(db, distro, release, manager, name, full_ver)
+    if not dmatches:
+        return []
+    cve_rows = {c.cve_id: c for c in db.query(CVE).filter(
+        CVE.cve_id.in_([m["cve_id"] for m in dmatches])).all()}
+    out = []
+    for m in dmatches:
+        c = cve_rows.get(m["cve_id"])
+        sev = (c.severity if c and c.severity not in ("", "UNKNOWN")
+               else _VENDOR_SEV.get((m.get("severity") or "").lower(), "UNKNOWN"))
+        out.append({"cve_id": m["cve_id"], "severity": sev,
+                    "cvss": c.cvss_v3_score if c else None,
+                    "fixed_version": m.get("fixed_version", ""),
+                    "advisory_id": m.get("advisory_id", "")})
+    return out
+
+
+def _nvd_norm_matches(db, name, clean_ver):
+    """Upstream NVD version-range matches, normalised to the common shape."""
+    out = []
+    for cve, _conf, _reason, fix_ver in correlate_package(db, name, clean_ver):
+        out.append({"cve_id": cve.cve_id, "severity": cve.severity,
+                    "cvss": cve.cvss_v3_score, "fixed_version": fix_ver, "advisory_id": ""})
+    return out
+
+
 def _assess_host(db, scan, host_addr, port, username, password, key_text, key_passphrase):
     """SSH into one host, enumerate packages, correlate. Returns (pkg_count, vuln_count)."""
     scanlog.log(db, scan, f"[{host_addr}] SSH connecting on port {port}…")
@@ -35,8 +70,12 @@ def _assess_host(db, scan, host_addr, port, username, password, key_text, key_pa
         host=host_addr, port=port, username=username,
         password=password, key_text=key_text, key_passphrase=key_passphrase,
     )
+    distro, manager = distro_feeds.distro_key(facts.os_id)
+    use_distro = bool(distro) and distro_feeds.has_advisories(db, distro)
     scanlog.log(db, scan, f"[{host_addr}] connected — {facts.os_name} {facts.os_version}; "
-                          f"{len(facts.packages)} packages; correlating…")
+                          f"{len(facts.packages)} packages; correlating "
+                          + (f"against {distro} security advisories (backport-aware)…"
+                             if use_distro else "against NVD (no distro feed loaded)…"))
     host = Host(scan_id=scan.id, address=host_addr, hostname="", state="up",
                 os_guess=f"{facts.os_name} {facts.os_version}".strip())
     db.add(host)
@@ -45,9 +84,12 @@ def _assess_host(db, scan, host_addr, port, username, password, key_text, key_pa
     total = len(facts.packages) or 1
     vuln_pkgs = 0
     for idx, (name, clean_ver, full_ver) in enumerate(facts.packages):
-        matches = correlate_package(db, name, clean_ver)
+        if use_distro:
+            matches = _distro_norm_matches(db, distro, facts.os_version, manager, name, full_ver)
+        else:
+            matches = _nvd_norm_matches(db, name, clean_ver)
         pkg = Package(scan_id=scan.id, host_id=host.id, name=name,
-                      version=clean_ver, full_version=full_ver, manager="dpkg")
+                      version=clean_ver, full_version=full_ver, manager=manager)
         if matches:
             vuln_pkgs += 1
             svc = Service(host_id=host.id, port=0, protocol="pkg", state="installed",
@@ -55,36 +97,43 @@ def _assess_host(db, scan, host_addr, port, username, password, key_text, key_pa
                           cpe="", banner=f"installed package {name} {full_ver}")
             db.add(svc)
             db.flush()
-            # Aggregate the package's CVEs into ONE consolidated remedy: the single
-            # latest version that, once upgraded to, resolves all of them.
+            # Aggregate the package's CVEs into ONE consolidated remedy.
             cve_ids, fix_versions = [], []
-            top_cve, max_sev, max_cvss = None, "NONE", None
-            for cve, confidence, reason, fix_ver in matches:
-                cve_ids.append(cve.cve_id)
-                if fix_ver:
-                    fix_versions.append(fix_ver)
-                if _SEV_WEIGHT.get(cve.severity, 0) > _SEV_WEIGHT.get(max_sev, 0):
-                    max_sev, top_cve = cve.severity, cve
-                if cve.cvss_v3_score and (max_cvss is None or cve.cvss_v3_score > max_cvss):
-                    max_cvss = cve.cvss_v3_score
-            top_cve = top_cve or matches[0][0]
+            top_cve_id, max_sev, max_cvss, top_adv = None, "NONE", None, ""
+            for m in matches:
+                cve_ids.append(m["cve_id"])
+                if m.get("fixed_version"):
+                    fix_versions.append(m["fixed_version"])
+                if _SEV_WEIGHT.get(m["severity"], 0) > _SEV_WEIGHT.get(max_sev, 0):
+                    max_sev, top_cve_id, top_adv = m["severity"], m["cve_id"], m.get("advisory_id", "")
+                if m.get("cvss") and (max_cvss is None or m["cvss"] > max_cvss):
+                    max_cvss = m["cvss"]
+            top_cve_id = top_cve_id or matches[0]["cve_id"]
             latest_fix = latest_fix_version(fix_versions)
             n = len(set(cve_ids))
-            if latest_fix:
-                remedy = (f"Upgrade '{name}' from {full_ver} to {latest_fix} or later "
-                          f"(single upgrade resolves all {n} matched CVE(s)).")
+            if use_distro:
+                # Distro-accurate: the advisory's fixed version already accounts for backports.
+                if latest_fix:
+                    remedy = (f"Upgrade '{name}' from {full_ver} to {latest_fix} or later per "
+                              f"your distro's security advisory ({top_adv or 'vendor errata'}); "
+                              f"resolves {n} CVE(s).")
+                else:
+                    remedy = (f"'{name}' {full_ver} is affected by {n} CVE(s) with no fixed "
+                              f"release yet from your distro — monitor vendor errata.")
             else:
-                remedy = (f"Upgrade '{name}' (installed {full_ver}) to the latest fixed "
-                          f"release from your OS vendor (resolves {n} CVE(s)).")
-            # The kernel (and other heavily-backported packages) keeps an upstream base
-            # version while the distro backports security fixes into its release build.
-            # NVD only knows upstream ranges, so these matches can over-report — flag that.
-            if _is_backported_pkg(name):
-                remedy += (" NOTE: matched against the upstream kernel version; your "
-                           "distro may have already backported these fixes into the "
-                           f"'{full_ver}' build — verify against your vendor's security "
-                           "errata (RHEL/Debian/Ubuntu) before treating as unpatched.")
-            db.add(Finding(scan_id=scan.id, service_id=svc.id, cve_id=top_cve.cve_id,
+                if latest_fix:
+                    remedy = (f"Upgrade '{name}' from {full_ver} to {latest_fix} or later "
+                              f"(single upgrade resolves all {n} matched CVE(s)).")
+                else:
+                    remedy = (f"Upgrade '{name}' (installed {full_ver}) to the latest fixed "
+                              f"release from your OS vendor (resolves {n} CVE(s)).")
+                # Upstream NVD matching over-reports backported packages — flag the kernel etc.
+                if _is_backported_pkg(name):
+                    remedy += (" NOTE: matched against the upstream version; your distro may "
+                               f"have backported these fixes into '{full_ver}' — load a distro "
+                               "security feed (CVE Database → Import distro feeds) for accurate "
+                               "results, or verify against vendor errata.")
+            db.add(Finding(scan_id=scan.id, service_id=svc.id, cve_id=top_cve_id,
                            severity=max_sev, cvss_score=max_cvss, match_confidence="high",
                            match_reason=f"[{host_addr}] {name} {clean_ver}: {n} CVE(s); {remedy}"))
             pkg.status = "vulnerable"
@@ -97,8 +146,10 @@ def _assess_host(db, scan, host_addr, port, username, password, key_text, key_pa
             pkg.status = "ok"
             pkg.max_severity = "NONE"
             pkg.cve_count = 0
-            pkg.remediation = ("No known CVE matched this version in the local CVE database. "
-                               "Keep current with vendor security updates.")
+            pkg.remediation = ("No known CVE matched this version in the "
+                               + ("distro security feed." if use_distro
+                                  else "local CVE database.")
+                               + " Keep current with vendor security updates.")
         db.add(pkg)
         if idx % 200 == 0 and idx:
             scanlog.log(db, scan, f"[{host_addr}] {idx}/{total} packages, {vuln_pkgs} vulnerable so far")

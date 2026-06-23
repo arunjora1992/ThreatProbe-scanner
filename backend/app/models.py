@@ -212,6 +212,30 @@ class WebFinding(Base):
     scan = relationship("Scan", back_populates="web_findings")
 
 
+class DistroAdvisory(Base):
+    """Vendor security-advisory data for backport-aware package matching.
+
+    Distros backport fixes onto an upstream base version, so NVD upstream ranges
+    over-report. A row says: for `distro`/`release`, package `package` is fixed in
+    `fixed_version` for `cve_id` (empty fixed_version = affected, no fix yet). The
+    credentialed package audit prefers this over raw NVD when advisories are loaded for
+    the host's distro: vulnerable iff installed_version < fixed_version (EVR compare).
+    """
+    __tablename__ = "distro_advisories"
+    __table_args__ = (
+        UniqueConstraint("distro", "release", "package", "cve_id", name="uq_distro_adv"),
+    )
+    id = Column(Integer, primary_key=True)
+    distro = Column(String(32), nullable=False, index=True)   # rhel|oracle|rocky|alma|centos|ubuntu|debian|suse
+    release = Column(String(32), default="", index=True)       # "9", "8", "22.04", "jammy", …
+    package = Column(String(255), nullable=False, index=True)  # source/binary package name
+    cve_id = Column(String(32), nullable=False, index=True)
+    fixed_version = Column(String(128), default="")            # EVR that fixes it ("" = no fix yet)
+    severity = Column(String(16), default="")                  # vendor severity if provided
+    advisory_id = Column(String(64), default="")               # RHSA/ELSA/USN id
+    manager = Column(String(8), default="rpm")                 # rpm | dpkg (for version compare)
+
+
 class ConfigFinding(Base):
     """CIS-style host-hardening / misconfiguration findings from a credentialed scan.
 

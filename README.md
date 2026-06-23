@@ -348,6 +348,30 @@ failures ranked by severity, with the engine + score in the header. All checks a
 than the scan account has) is reported as *n/a* rather than a false pass/fail — so prefer a
 scan account with adequate `sudo`/read access for full coverage.
 
+### Distro security feeds (backport-aware matching)
+
+Distros **backport** security fixes onto a base package version (RHEL ships
+`kernel-5.14.0-427.el9`, not the upstream version the fix first appeared in), so matching
+the upstream version against NVD ranges **over-reports** — it flags CVEs your distro has
+already patched. To fix this, load **vendor security advisories** and the credentialed
+package audit will use the distro's *fixed version* instead of NVD.
+
+Supported, air-gap-friendly feeds — drop them in **`data/cve_feeds/distro_feeds/`** then
+**CVE Database → 🐧 Import distro feeds** (or `POST /api/cves/distro-feeds/import`):
+
+- **OVAL v2** (XML, `.bz2`/`.gz` ok) — covers **RHEL / CentOS, Oracle Linux (ELSA),
+  Rocky / Alma, Ubuntu**. The parser reads the distro + release from each definition,
+  so one importer handles them all. (RHEL OVAL also serves CentOS/Rocky/Alma, which track
+  RHEL errata; Oracle and Ubuntu publish their own OVAL.)
+- **Debian Security Tracker JSON** — a single file covering all Debian releases.
+
+When advisories are loaded for a host's distro, the scan reports a package as vulnerable
+**only if its installed version is older than the distro's fixed version** (compared with
+the correct **EVR/dpkg** algorithm, honouring epoch and `-release`). The remediation cites
+the vendor advisory (RHSA/ELSA/USN). When no feed is loaded for that distro, it falls back
+to NVD matching with the backport caveat. *(Windows/MSRC is a planned follow-on and needs
+the WinRM scanner.)*
+
 ### Matching accuracy & limitations
 
 Correlation is **version-aware**: a service/package is only reported when its detected

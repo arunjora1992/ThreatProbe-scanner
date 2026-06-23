@@ -648,6 +648,7 @@
         <button class="btn admin-only" onclick="document.getElementById('cve-upload-file').click()">⬆ Upload CVE DB</button>
         <button class="btn btn-primary admin-only" onclick="ptImportFeeds()">⬆ Import NVD feeds</button>
         <button class="btn admin-only" onclick="ptImportThreatIntel()" title="Enrich CVEs with CISA KEV (exploited-in-the-wild) + FIRST EPSS scores">🎯 Import KEV / EPSS</button>
+        <button class="btn admin-only" onclick="ptImportDistroFeeds()" title="Import vendor advisories (OVAL / Debian JSON) for backport-aware package matching">🐧 Import distro feeds</button>
         <input type="file" id="cve-upload-file" accept=".json,.gz,.json.gz,.json.xz" style="display:none" onchange="ptUploadCveDb(this)">
       </div></div>`
       + `<div class="toolbar">
@@ -800,6 +801,13 @@
       const r = await API.post("/api/cves/import");
       toast(r.message);
       renderCves();
+    } catch (ex) { toast(ex.message, "err"); }
+  };
+  window.ptImportDistroFeeds = async () => {
+    toast("Importing distro security advisories from /data/cve_feeds/distro_feeds …");
+    try {
+      const r = await API.post("/api/cves/distro-feeds/import");
+      toast(r.message || "Distro feeds imported");
     } catch (ex) { toast(ex.message, "err"); }
   };
   window.ptImportThreatIntel = async () => {

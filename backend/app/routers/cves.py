@@ -17,7 +17,7 @@ from ..database import get_db
 from ..models import CVE, User
 from ..schemas import CVEImportResult, CVEOut
 from ..services.cve_import import export_cves, import_feed_directory, import_single_file
-from ..services import cve_updater, threat_intel
+from ..services import cve_updater, distro_feeds, threat_intel
 
 
 class UpdateConfigIn(BaseModel):
@@ -78,6 +78,24 @@ def import_threat_intel_feeds(online: bool = False, db: Session = Depends(get_db
     when ?online=true. Run after importing NVD feeds.
     """
     return threat_intel.import_threat_intel(db, online=online)
+
+
+@router.post("/distro-feeds/import")
+def import_distro_feeds_endpoint(db: Session = Depends(get_db),
+                                 _: User = Depends(require_admin)):
+    """Import vendor security advisories (OVAL / Debian tracker JSON) for backport-aware
+    package matching. Drop feeds in <feed_dir>/distro_feeds and call this."""
+    return distro_feeds.import_distro_feeds(db)
+
+
+@router.get("/distro-feeds/status")
+def distro_feeds_status(db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+    """Per-distro advisory counts so the GUI can show what's loaded."""
+    from sqlalchemy import func
+    from ..models import DistroAdvisory
+    rows = db.query(DistroAdvisory.distro, func.count(DistroAdvisory.id)).group_by(
+        DistroAdvisory.distro).all()
+    return {"total": sum(c for _, c in rows), "by_distro": {d: c for d, c in rows}}
 
 
 @router.get("/count")
