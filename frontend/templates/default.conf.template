@@ -1,8 +1,30 @@
+# Rendered at container start by nginx's envsubst (only ${PUBLIC_HTTPS_PORT} is
+# substituted; nginx runtime vars like $host/$uri are preserved).
+
+# Plain HTTP — redirect everything to HTTPS on the published TLS port.
 server {
     listen 80;
     server_name _;
+    return 301 https://$host:${PUBLIC_HTTPS_PORT}$request_uri;
+}
+
+# HTTPS (self-signed certificate generated at container start).
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name _;
     root /usr/share/nginx/html;
     index index.html;
+
+    ssl_certificate     /etc/nginx/certs/server.crt;
+    ssl_certificate_key /etc/nginx/certs/server.key;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+
+    # If a client speaks plain HTTP to this TLS port, bounce them to HTTPS instead
+    # of returning nginx's raw "400 Bad Request" page.
+    error_page 497 =301 https://$host:${PUBLIC_HTTPS_PORT}$request_uri;
 
     # Large enough for a full CVE database upload (a complete NVD export gzips to ~50 MB
     # and grows over time) and NVD feed uploads.

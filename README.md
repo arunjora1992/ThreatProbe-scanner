@@ -66,7 +66,7 @@ with vulnerability, severity, CVSS, and remediation details.
 
 ```
                        ┌───────────────────────┐
-        Browser  ─────▶│  frontend (nginx)     │  :8080
+        Browser  ─HTTPS▶│  frontend (nginx)     │  :8443 (TLS) / :8080→redirect
                        │  static GUI + /api ───┐│
                        └───────────────────────┘│
                                                 ▼
@@ -170,9 +170,12 @@ docker compose up -d --build
 
 Wait ~15 seconds for the database to become healthy and the backend to seed, then open:
 
-> **http://localhost:8080**
+> **https://localhost:8443**
 
-Log in with the admin credentials from your `.env`.
+The GUI is served over **HTTPS with a self-signed certificate** (generated automatically
+on first start), so your browser will show a one-time "not secure / untrusted certificate"
+warning — accept it to proceed. Plain `http://localhost:8080` automatically redirects to
+HTTPS. Log in with the admin credentials from your `.env`.
 
 To watch startup:
 
@@ -189,7 +192,8 @@ docker compose logs -f worker      # "[worker] started; ... nmap=available"
 |-----------------|-------------------------------------------|------------------------|
 | Admin username  | `admin`                                   | `ADMIN_USERNAME` (.env)|
 | Admin password  | value of `ADMIN_PASSWORD` in `.env`       | `ADMIN_PASSWORD` (.env)|
-| GUI URL         | `http://localhost:8080`                   | `FRONTEND_PORT` (.env) |
+| GUI URL (HTTPS) | `https://localhost:8443` (self-signed)    | `FRONTEND_HTTPS_PORT` (.env) |
+| GUI URL (HTTP)  | `http://localhost:8080` → redirects to HTTPS | `FRONTEND_PORT` (.env) |
 | API (internal)  | `backend:8000` (proxied via `/api`)       | —                      |
 | Database        | `db:5432` (not published to host)         | —                      |
 
@@ -580,7 +584,8 @@ Set in `.env` (consumed by `docker-compose.yml`) or directly in the environment.
 | `NMAP_DEFAULT_FLAGS`          | `-sT -sV -T4 --open`                   | Flags for the `full` profile             |
 | `SCAN_TIMEOUT_SECONDS`        | `3600`                                 | Hard cap per scan                        |
 | `WORKER_POLL_INTERVAL`        | `5`                                    | Worker poll interval (seconds)           |
-| `FRONTEND_PORT`               | `8080`                                 | Host port for the GUI                    |
+| `FRONTEND_PORT`               | `8080`                                 | Host HTTP port (redirects to HTTPS)      |
+| `FRONTEND_HTTPS_PORT`         | `8443`                                 | Host HTTPS port for the GUI (self-signed)|
 | `CORS_ORIGINS`                | `*`                                    | Allowed CORS origins                     |
 
 ---

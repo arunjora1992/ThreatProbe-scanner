@@ -101,11 +101,20 @@ services:
   frontend:
     build: ./frontend
     container_name: pentest_frontend
+    environment:
+      # Public HTTPS port — used to build the HTTP->HTTPS redirect target.
+      PUBLIC_HTTPS_PORT: ${FRONTEND_HTTPS_PORT:-8443}
     ports:
-      - "${FRONTEND_PORT:-8080}:80"
+      - "${FRONTEND_PORT:-8080}:80"          # HTTP — redirects to HTTPS
+      - "${FRONTEND_HTTPS_PORT:-8443}:443"   # HTTPS (self-signed certificate)
+    volumes:
+      # Persist the self-signed cert across container recreates so the browser
+      # doesn't have to re-trust a new cert each rebuild. Generated on first start.
+      - frontendcerts:/etc/nginx/certs
     depends_on:
       - backend
     restart: unless-stopped
 
 volumes:
+  frontendcerts:
   pgdata:
