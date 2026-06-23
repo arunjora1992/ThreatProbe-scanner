@@ -1152,6 +1152,10 @@
             <input type="file" id="br-file" accept="image/png,image/svg+xml,image/jpeg" onchange="ptBrandPickLogo(this)"></div>
           <div class="form-row"><label>Current logo</label>
             <div id="br-preview" style="background:var(--bg-2);padding:10px;border-radius:8px">${b.logo_data_url ? `<img src="${esc(b.logo_data_url)}" style="height:48px">` : `<span style="font-size:40px">${esc(b.logo_emoji || "🛡️")}</span>`}</div></div>
+          <div class="form-row"><label>Favicon (browser-tab icon — PNG/SVG/ICO)</label>
+            <input type="file" id="br-fav-file" accept="image/png,image/svg+xml,image/x-icon,image/vnd.microsoft.icon,image/jpeg" onchange="ptBrandPickFavicon(this)"></div>
+          <div class="form-row"><label>Current favicon</label>
+            <div id="br-fav-preview" style="background:var(--bg-2);padding:10px;border-radius:8px">${b.favicon_data_url ? `<img src="${esc(b.favicon_data_url)}" style="height:32px">` : '<span class="muted small">none (uses logo / default)</span>'}</div></div>
           <div class="pill-row">
             <button class="btn btn-primary" onclick="ptSaveBranding()">Save branding</button>
             <button class="btn" onclick="ptClearLogo()">Remove uploaded logo</button>
@@ -1216,6 +1220,19 @@
     };
     r.readAsDataURL(f);
   };
+  let _brandFav = null;  // null = unchanged
+  window.ptBrandPickFavicon = (input) => {
+    const f = input.files && input.files[0];
+    if (!f) return;
+    if (f.size > 512 * 1024) { toast("Favicon too large (max ~512 KB)", "err"); input.value = ""; return; }
+    const r = new FileReader();
+    r.onload = () => {
+      _brandFav = r.result;
+      const p = document.getElementById("br-fav-preview");
+      if (p) p.innerHTML = `<img src="${esc(_brandFav)}" style="height:32px">`;
+    };
+    r.readAsDataURL(f);
+  };
   window.ptClearLogo = () => {
     _brandLogo = "";
     const p = document.getElementById("br-preview");
@@ -1229,9 +1246,10 @@
       logo_emoji: document.getElementById("br-emoji").value.trim() || "🛡️",
     };
     if (_brandLogo !== null) body.logo_data_url = _brandLogo;  // only send when changed
+    if (_brandFav !== null) body.favicon_data_url = _brandFav;
     try {
       await API.put("/api/branding", body);
-      _brandLogo = null;
+      _brandLogo = null; _brandFav = null;
       await ptApplyBranding();   // re-apply live (sidebar/title update immediately)
       toast("Branding saved");
       renderSettings();
@@ -1295,6 +1313,13 @@
       const ll = document.getElementById("login-logo"); if (ll) ll.innerHTML = _logoHtml(b, 56);
       const br = document.getElementById("brand");
       if (br) br.innerHTML = `${_logoHtml(b, 24)} <span>${esc(name)}</span>`;
+      // Favicon (uploaded image, else fall back to the logo image if it's a raster/SVG).
+      const favUrl = b.favicon_data_url || (b.logo_data_url || "");
+      if (favUrl) {
+        let link = document.querySelector("link[rel='icon']");
+        if (!link) { link = document.createElement("link"); link.rel = "icon"; document.head.appendChild(link); }
+        link.href = favUrl;
+      }
       window._branding = b;
     } catch { /* keep static defaults if branding can't load */ }
   }

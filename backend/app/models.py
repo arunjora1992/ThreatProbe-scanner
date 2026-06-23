@@ -64,6 +64,7 @@ class BrandingConfig(Base):
     app_name = Column(String(100), default="ThreatProbe Scanner")
     logo_emoji = Column(String(16), default="🛡️")
     logo_data_url = Column(Text, default="")
+    favicon_data_url = Column(Text, default="")  # browser-tab icon (data: URI)
     updated_at = Column(DateTime, default=datetime.utcnow)
 
 
