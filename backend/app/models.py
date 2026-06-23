@@ -80,6 +80,27 @@ class CveUpdateConfig(Base):
     last_added = Column(Integer, default=0)
 
 
+class ScanSchedule(Base):
+    """A recurring scan against a target, run automatically by the backend scheduler.
+
+    Only credential-less scan types are schedulable (network/web/unauth-ZAP) — SSH/CIS
+    and authenticated scans need in-memory credentials that are never stored.
+    """
+    __tablename__ = "scan_schedules"
+    id = Column(Integer, primary_key=True)
+    target_id = Column(Integer, ForeignKey("targets.id", ondelete="CASCADE"), nullable=False, index=True)
+    scan_type = Column(String(32), default="full")
+    custom_flags = Column(String(255), default="")
+    interval_hours = Column(Integer, default=24)
+    enabled = Column(Boolean, default=True, index=True)
+    last_run = Column(DateTime, nullable=True)
+    next_run = Column(DateTime, nullable=True, index=True)
+    created_by = Column(String(64), default="")
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    target = relationship("Target")
+
+
 class Target(Base):
     __tablename__ = "targets"
     id = Column(Integer, primary_key=True)

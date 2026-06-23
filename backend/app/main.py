@@ -8,7 +8,7 @@ from sqlalchemy.exc import OperationalError
 
 from .config import settings
 from .database import Base, engine
-from .routers import auth, branding, cves, dashboard, findings, reports, scans, settings as settings_router, targets
+from .routers import auth, branding, cves, dashboard, findings, reports, scans, schedules, settings as settings_router, targets
 from .seed import run_seed
 
 app = FastAPI(
@@ -77,8 +77,9 @@ def startup():
     _ensure_columns()
     _ensure_indexes()
     run_seed()
-    from .services import cve_updater
+    from .services import cve_updater, scan_scheduler
     cve_updater.start_scheduler()
+    scan_scheduler.start_scheduler()
     print("[api] startup complete", flush=True)
 
 
@@ -96,3 +97,4 @@ app.include_router(reports.router)
 app.include_router(dashboard.router)
 app.include_router(settings_router.router)
 app.include_router(branding.router)
+app.include_router(schedules.router)

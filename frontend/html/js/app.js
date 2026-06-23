@@ -118,8 +118,8 @@
 
   // ---------- routing (path-based, reflected in the browser URL) ----------
   const ROUTES = { dashboard: renderDashboard, targets: renderTargets, scans: renderScans,
-                   cves: renderCves, reports: renderReports, settings: renderSettings,
-                   users: renderUsers };
+                   schedules: renderSchedules, cves: renderCves, reports: renderReports,
+                   settings: renderSettings, users: renderUsers };
 
   document.getElementById("nav").addEventListener("click", (e) => {
     const item = e.target.closest(".nav-item");
@@ -450,6 +450,87 @@
       toast("Stop requested — the scan will halt shortly");
       if (typeof refreshScans === "function") refreshScans();
     } catch (ex) { toast(ex.message, "err"); }
+  };
+
+  // ---------- Schedules ----------
+  const SCHED_TYPES = [
+    ["full", "Server VA (nmap -sV + CVE)"], ["discovery", "Host discovery"],
+    ["port", "Port scan"], ["web", "Web / URL (built-in)"],
+    ["zap_passive", "ZAP passive"], ["zap_active", "ZAP active"], ["custom", "Custom nmap"],
+  ];
+  async function renderSchedules() {
+    view.innerHTML = `<div class="page-head"><h1>Scheduled scans</h1>
+      <button class="btn btn-primary" onclick="ptNewSchedule()">+ New schedule</button></div>
+      <p class="muted small">Recurring scans run automatically. Credentialed/CIS scans aren't schedulable (they need in-memory credentials that are never stored).</p>
+      <div id="sched-box">${loading()}</div>`;
+    try {
+      const [schs, targets] = await Promise.all([API.get("/api/schedules"), API.get("/api/targets")]);
+      const tmap = {}; targets.forEach(t => tmap[t.id] = t);
+      window._targets = targets;
+      const rows = schs.map(s => {
+        const t = tmap[s.target_id] || {};
+        return `<tr>
+          <td><b>${esc(t.name || "?")}</b><br><span class="muted small mono">${esc(t.address || "")}</span></td>
+          <td>${esc(s.scan_type)}</td>
+          <td>every ${s.interval_hours}h</td>
+          <td>${s.enabled ? '<span class="status-badge status-completed">on</span>' : '<span class="status-badge">off</span>'}</td>
+          <td class="small">${fmtDate(s.last_run)}</td>
+          <td class="small">${fmtDate(s.next_run)}</td>
+          <td onclick="event.stopPropagation()" class="pill-row">
+            <button class="btn btn-sm" onclick="ptRunSchedule(${s.id})">Run now</button>
+            <button class="btn btn-sm" onclick="ptToggleSchedule(${s.id}, ${s.enabled ? "false" : "true"})">${s.enabled ? "Disable" : "Enable"}</button>
+            <button class="btn btn-sm btn-danger" onclick="ptDelSchedule(${s.id})">Del</button>
+          </td></tr>`;
+      }).join("") || `<tr><td colspan="7" class="empty">No schedules. Create one to run scans automatically.</td></tr>`;
+      document.getElementById("sched-box").innerHTML = `<div class="table-wrap"><table>
+        <thead><tr><th>Target</th><th>Type</th><th>Interval</th><th>Enabled</th><th>Last run</th><th>Next run</th><th></th></tr></thead>
+        <tbody>${rows}</tbody></table></div>`;
+    } catch (ex) { document.getElementById("sched-box").innerHTML = errBox(ex); }
+  }
+  window.ptNewSchedule = () => {
+    const targets = window._targets || [];
+    if (!targets.length) { toast("Create a target first", "err"); return; }
+    modal("New scheduled scan", `
+      <div class="form-row"><label>Target</label><select id="sc-target">
+        ${targets.map(t => `<option value="${t.id}">${esc(t.name)} (${esc(t.address)})</option>`).join("")}</select></div>
+      <div class="form-row"><label>Scan type</label><select id="sc-type" onchange="ptSchedCustomToggle()">
+        ${SCHED_TYPES.map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join("")}</select></div>
+      <div class="form-row hidden" id="sc-custom-row"><label>Custom nmap flags</label><input id="sc-custom" placeholder="-sT -sV -p 1-1000"></div>
+      <div class="form-row"><label>Run every (hours)</label><input id="sc-interval" type="number" value="24" min="1"></div>
+      <button class="btn btn-primary btn-block" onclick="ptSaveSchedule()">Create schedule</button>`);
+  };
+  window.ptSchedCustomToggle = () => {
+    document.getElementById("sc-custom-row").classList.toggle("hidden",
+      document.getElementById("sc-type").value !== "custom");
+  };
+  window.ptSaveSchedule = async () => {
+    const body = {
+      target_id: parseInt(document.getElementById("sc-target").value, 10),
+      scan_type: document.getElementById("sc-type").value,
+      custom_flags: (document.getElementById("sc-custom") || {}).value || "",
+      interval_hours: parseInt(document.getElementById("sc-interval").value, 10) || 24,
+      enabled: true,
+    };
+    try { await API.post("/api/schedules", body); closeModal(); toast("Schedule created"); renderSchedules(); }
+    catch (ex) { toast(ex.message, "err"); }
+  };
+  window.ptRunSchedule = async (id) => {
+    try { const r = await API.post(`/api/schedules/${id}/run`); toast(r.message); }
+    catch (ex) { toast(ex.message, "err"); }
+  };
+  window.ptToggleSchedule = async (id, enable) => {
+    try {
+      const schs = await API.get("/api/schedules");
+      const s = schs.find(x => x.id === id); if (!s) return;
+      await API.put(`/api/schedules/${id}`, { target_id: s.target_id, scan_type: s.scan_type,
+        custom_flags: s.custom_flags, interval_hours: s.interval_hours, enabled: enable });
+      renderSchedules();
+    } catch (ex) { toast(ex.message, "err"); }
+  };
+  window.ptDelSchedule = async (id) => {
+    if (!confirm("Delete schedule #" + id + "?")) return;
+    try { await API.del(`/api/schedules/${id}`); toast("Deleted"); renderSchedules(); }
+    catch (ex) { toast(ex.message, "err"); }
   };
 
   // ---------- Scan detail ----------
