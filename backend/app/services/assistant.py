@@ -27,6 +27,13 @@ from ..models import (CVE, ConfigFinding, DistroAdvisory, Finding, Host, Package
 CVE_RE = re.compile(r"CVE-\d{4}-\d{3,7}", re.I)
 SCAN_RE = re.compile(r"scan\s*#?\s*(\d+)", re.I)
 PKG_RE = re.compile(r"(?:package|is|about)\s+([a-zA-Z0-9][\w.+-]{1,40})", re.I)
+HOST_RE = re.compile(r"https?://([^/\s]+)|\b(\d{1,3}(?:\.\d{1,3}){3})\b|\b((?:[a-z0-9-]+\.)+[a-z]{2,})\b", re.I)
+SCAN_INTENT_RE = re.compile(r"\b(scan|result|audit|finding|vulnerab|compliance|report|assessment)\b", re.I)
+
+
+def _extract_host(message: str):
+    m = HOST_RE.search(message or "")
+    return next((g for g in m.groups() if g), None) if m else None
 
 # Grounded explanations for common vuln classes (so "explain X" is accurate regardless
 # of the small model). keyword(s) -> (title, what, fix).
@@ -148,6 +155,23 @@ def retrieve(db: Session, message: str) -> dict:
             citations.append(f"scan#{sid}")
             scan_summary = _scan_summary(db, scan)
             blocks.append("[SCAN] " + scan_summary.replace("\n", " "))
+
+    # ---- scan referenced by target IP/host (no scan number given) ----
+    if scan_summary is None and SCAN_INTENT_RE.search(message):
+        host = _extract_host(message)
+        if host:
+            from ..models import Target
+            target = (db.query(Target)
+                      .filter(func.lower(Target.address).like(f"%{host.lower()}%"))
+                      .first())
+            if target:
+                latest = (db.query(Scan).filter(Scan.target_id == target.id)
+                          .order_by(Scan.created_at.desc()).first())
+                if latest:
+                    citations.append(f"scan#{latest.id}")
+                    scan_summary = _scan_summary(db, latest)
+                    blocks.append(f"[SCAN] (latest scan for {host}) "
+                                  + scan_summary.replace("\n", " "))
 
     # ---- package name ----
     if not citations:  # only if nothing more specific matched
