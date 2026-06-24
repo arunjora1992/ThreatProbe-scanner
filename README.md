@@ -49,7 +49,8 @@ with vulnerability, severity, CVSS, and remediation details.
 18. [Air-gapped deployment](#air-gapped-deployment)
 19. [Backup & restore](#backup--restore)
 20. [Troubleshooting](#troubleshooting)
-21. [Authorization & scope](#authorization--scope)
+21. [Bug history & fixes](#bug-history--fixes)
+22. [Authorization & scope](#authorization--scope)
 
 ---
 
@@ -905,6 +906,34 @@ docker compose down -v
 - **`401 Unauthorized` in the GUI** — token expired; log in again.
 - **Backend can't connect to DB at startup** — it retries for ~60s waiting for the
   `db` healthcheck; check `docker compose logs db`.
+
+---
+
+## Bug history & fixes
+
+A transparent log of bugs found during development and how they were fixed (newest first).
+Commit hashes are on the `main` branch.
+
+| Date | Area | Bug → Fix | Commit |
+|------|------|-----------|--------|
+| 2026-06-25 | Reports / AI | Report filenames lacked context; AI showed results for still-running scans; AI dumped the whole summary for pointed questions and miscounted ("21" of 484). → Filenames now `target_type_scanID_timestamp_report.*`; running scans return an "in progress" message (wizard waits for completion); pointed questions are answered as focused insights while counts stay deterministic. | `010145c` |
+| 2026-06-24 | AI assistant | "scan result of **89**" wasn't recognised (only "scan #N" matched), so the model answered from empty context; intent stems (`summarise`, `vulnerability`) never matched. → Resolve scans by bare number, and fixed stem matching. | `67d7cdf` |
+| 2026-06-24 | AI assistant | A scan referenced by **target IP** ("scan on 10.0.10.246") bypassed the deterministic path and the model hallucinated "no findings". → Resolve a target's latest scan from an IP/host. | `e580906` |
+| 2026-06-24 | AI assistant | The 1.5B model **inverted CIS counts** — reported a 6-failed scan as "no failures". → Scan summaries are now built deterministically from DB facts (model not used for aggregates). | `e969dcb` |
+| 2026-06-24 | Dashboard | "Scans by status" chart looked poor; no scan-completion notification; copyright missing on inner pages. → Status donut + "Scans by type" + 14-day activity chart; global completion toast + browser notification; global page footer. | `e969dcb` |
+| 2026-06-24 | Branding / UI | Browser-tab **favicon blank**; default logo showed a white box; AI chat history lost on reload. → Bundled gradient-shield favicon/logo (transparent); chat history persisted with a Clear button. | `3286e5c` |
+| 2026-06-24 | Dashboard / Scans | Dashboard finding count ignored **CIS** results; Scans page had no per-scan result count. → Count CVE + web + failed-CIS across all types; added a Results column. | `816ded9` |
+| 2026-06-24 | Scan detail | Every scan showed all sections (hosts/ports, web, CVE) regardless of type; wide "CVEs in DB" number overlapped its icon. → Per-scan-type sections; flex KPI layout. | `c964f2b` |
+| 2026-06-24 | Feeds / air-gap | Online KEV/EPSS/CVE imports didn't persist the downloaded files, so they couldn't be carried to an air-gapped host; the NVD feed was deleted after import. → Online fetches now save files under `/data/cve_feeds`; the updater keeps the NVD feed. | `8164b81`, `6642166` |
+| 2026-06-24 | Distro feeds / CIS | **Ubuntu OVAL imported 0 rows** (its tests live in `extend_definition`s referenced via `var_ref`); CIS output didn't show distro/level. → Transitive `extend_definition` + variable resolution; CIS now shows distro + benchmark level + score. | `e3b2384` |
+| 2026-06-23 | Reports | Per-scan-type PDF/CSV reports had **blank columns** (one template for all types). → Dedicated templates per scan type. | `91b10a9` |
+| 2026-06-23 | CIS / OpenSCAP | OpenSCAP fell back to built-in checks even when present; rules came back all-`notapplicable` on RHEL clones; remediation was blank; no rule results parsed. → Scored datastream selection preferring clone content, `--results-arf` for remediation, auto-install + stderr surfacing + regex fallback. | `3fb9f53`, `acb3199`, `797cc29`, `79691cd` |
+| 2026-06-23 | Navigation | Browser **Back button** from a scan was broken. → Path-based routing with history support; added Rescan. | `9f400d2` |
+| 2026-06-23 | Database | `findings.match_reason` overflowed `varchar(255)` (kernel backport caveat). → Widened the column to `TEXT`. | `00b5ce6` |
+| 2026-06-23 | CVE matching | Kernel packages weren't correlated to CVEs (product-name mismatch). → `linux_kernel` product alias (refined to avoid false positives). | `ef38fe8` |
+| 2026-06-19 | Web / ZAP | Authenticated ZAP scans on **SPAs** returned empty results. → Bearer/token session handling + AJAX spider fixes. | `20d037b` |
+| 2026-06-11 | Web / ZAP | ZAP **OOM-restarted** on real/large targets during active scans. → Bounded crawl/scan scope + JVM memory caps + `shm_size`. | `cecdaa4`, `c306692` |
+| 2026-06-11 | UI | Stale cached CSS/JS served after updates; severity/CVE labels wrapped onto multiple lines. → Asset cache-busting (`?v=N`); nowrap badge/label styling. | `23ea908`, `c77cacd` |
 
 ---
 
