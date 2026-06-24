@@ -1,4 +1,23 @@
-# 🛡️ ThreatProbe Scanner — Air-Gapped Penetration Testing Platform
+<p align="center">
+  <img src="docs/logo.svg" alt="ThreatProbe Scanner" width="104" height="104" />
+</p>
+
+<h1 align="center">ThreatProbe Scanner</h1>
+
+<p align="center">
+  <b>Air-Gapped Vulnerability Assessment &amp; Penetration Testing Platform</b><br/>
+  <sub>Network &amp; server VA · Web/ZAP testing · Credentialed audits · CIS hardening · KEV/EPSS risk · Offline AI assistant</sub>
+</p>
+
+<p align="center">
+  <img alt="Deployment: air-gapped" src="https://img.shields.io/badge/deployment-air--gapped-4f46e5" />
+  <img alt="Run with Docker Compose" src="https://img.shields.io/badge/run-Docker%20Compose-2496ed?logo=docker&logoColor=white" />
+  <img alt="Backend: FastAPI / Python" src="https://img.shields.io/badge/backend-FastAPI%20%C2%B7%20Python-009688?logo=fastapi&logoColor=white" />
+  <img alt="Database: PostgreSQL" src="https://img.shields.io/badge/db-PostgreSQL-316192?logo=postgresql&logoColor=white" />
+  <img alt="Web scanner: OWASP ZAP" src="https://img.shields.io/badge/web-OWASP%20ZAP-00549e" />
+  <img alt="Offline AI: llama.cpp" src="https://img.shields.io/badge/AI-offline%20%C2%B7%20llama.cpp-8b5cf6" />
+  <img alt="Data: NVD · KEV · EPSS · OVAL" src="https://img.shields.io/badge/feeds-NVD%20%C2%B7%20KEV%20%C2%B7%20EPSS%20%C2%B7%20OVAL-be123c" />
+</p>
 
 A self-contained, **Docker-Compose based** vulnerability assessment and penetration
 testing platform built to run **fully offline / air-gapped**. It provides a web GUI,
