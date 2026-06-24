@@ -115,6 +115,79 @@
       <text x="${padX + iw}" y="${padTop + 2}" text-anchor="end" font-size="10" fill="var(--muted)">${total} total</text>
     </svg>`;
   }
+
+  // ---------- collapsible sections + sortable result tables ----------
+  const SEV_RANK = { CRITICAL: 5, HIGH: 4, MEDIUM: 3, LOW: 2, INFO: 1, NONE: 0, UNKNOWN: 0 };
+  // Section heading that toggles its body; optional right-aligned controls (e.g. a sort menu).
+  function sectionHead(id, title, controls) {
+    return `<div class="sect-head">
+      <h3 class="section-title" style="margin:0;cursor:pointer" onclick="ptToggleSection('${id}')"><span class="caret" id="caret-${id}">▾</span> ${title}</h3>
+      ${controls ? `<div class="sect-controls">${controls}</div>` : ""}</div>`;
+  }
+  window.ptToggleSection = (id) => {
+    const b = document.getElementById(`sect-${id}`);
+    const c = document.getElementById(`caret-${id}`);
+    if (!b) return;
+    const hidden = b.classList.toggle("hidden");
+    if (c) c.textContent = hidden ? "▸" : "▾";
+  };
+  function sortMenu(fn, opts, sel) {
+    return `<select class="btn-sm" onchange="${fn}(this.value)">`
+      + opts.map(([v, l]) => `<option value="${v}" ${v === sel ? "selected" : ""}>${esc(l)}</option>`).join("")
+      + `</select>`;
+  }
+  function sortFindings(arr, key) {
+    const sev = (f) => SEV_RANK[f.severity] || 0;
+    const cmps = {
+      risk: (x, y) => (y.kev ? 1 : 0) - (x.kev ? 1 : 0) || sev(y) - sev(x) || (y.epss_score || 0) - (x.epss_score || 0) || (y.cvss_score || 0) - (x.cvss_score || 0),
+      severity: (x, y) => sev(y) - sev(x) || (y.cvss_score || 0) - (x.cvss_score || 0),
+      cvss: (x, y) => (y.cvss_score || 0) - (x.cvss_score || 0),
+      epss: (x, y) => (y.epss_score || 0) - (x.epss_score || 0),
+      package: (x, y) => (x.package || "").localeCompare(y.package || ""),
+      cve: (x, y) => (x.cve_id || "").localeCompare(y.cve_id || ""),
+      status: (x, y) => (x.status || "").localeCompare(y.status || ""),
+    };
+    return [...arr].sort(cmps[key] || cmps.risk);
+  }
+  function findingRowHtml(f) {
+    return `<tr>
+      <td class="nowrap"><a onclick="ptViewCve('${esc(f.cve_id)}')">${esc(f.cve_id)}</a>${f.kev ? ' <span class="sev-badge sev-critical" title="CISA Known Exploited Vulnerability — actively exploited">KEV</span>' : ""}</td>
+      <td>${esc(f.package || "—")}</td>
+      <td>${sevBadge(f.severity)}</td>
+      <td>${f.cvss_score ?? "—"}</td>
+      <td class="nowrap small">${f.epss_score != null ? (f.epss_score * 100).toFixed(1) + "%" : "—"}</td>
+      <td>${esc(f.match_confidence)}<br><span class="muted small">${esc(f.match_reason)}</span></td>
+      <td><select class="btn-sm" onchange="ptSetFindingStatus(${f.id}, this.value)">
+        ${["open", "confirmed", "false_positive", "fixed", "accepted"].map((s) => `<option ${f.status === s ? "selected" : ""}>${s}</option>`).join("")}
+      </select></td></tr>`;
+  }
+  window.ptSortFindings = (key) => {
+    const tb = document.getElementById("find-tbody");
+    if (!tb) return;
+    const rows = sortFindings(window._sdFindings || [], key).slice(0, window._sdFindCap || 300);
+    tb.innerHTML = rows.map(findingRowHtml).join("") || `<tr><td colspan="7" class="empty">No CVE findings correlated.</td></tr>`;
+  };
+  function webRowHtml(w) {
+    return `<tr>
+      <td><b>${esc(w.name)}</b>${w.cve_id ? ` <a onclick="ptViewCve('${esc(w.cve_id)}')">${esc(w.cve_id)}</a>` : ""}
+        <br><span class="muted small">${esc(w.description)}</span>
+        ${w.evidence ? `<br><span class="muted small mono">${esc(w.evidence)}</span>` : ""}</td>
+      <td>${esc(w.category)}</td>
+      <td>${sevBadge(w.severity)}</td>
+      <td class="small">${esc(w.remediation)}</td></tr>`;
+  }
+  window.ptSortWeb = (key) => {
+    const tb = document.getElementById("web-tbody");
+    if (!tb) return;
+    const sev = (w) => SEV_RANK[w.severity] || 0;
+    const cmps = {
+      severity: (x, y) => sev(y) - sev(x),
+      category: (x, y) => (x.category || "").localeCompare(y.category || ""),
+      name: (x, y) => (x.name || "").localeCompare(y.name || ""),
+    };
+    const rows = [...(window._sdWeb || [])].sort(cmps[key] || cmps.severity);
+    tb.innerHTML = rows.map(webRowHtml).join("") || `<tr><td colspan="4" class="empty">No web findings.</td></tr>`;
+  };
   function legend(items) {
     return `<div class="legend">` + items.filter(i => i.value > 0).map((i) =>
       `<span><i style="background:${i.color}"></i>${esc(i.label)} ${i.value}</span>`).join("") + `</div>`;
@@ -1189,32 +1262,16 @@
       const showWeb = isWeb || webFindings.length > 0;
 
       const FIND_CAP = 300;
-      const findRows = findings.slice(0, FIND_CAP).map((f) => `
-        <tr>
-          <td class="nowrap"><a onclick="ptViewCve('${esc(f.cve_id)}')">${esc(f.cve_id)}</a>${f.kev ? ' <span class="sev-badge sev-critical" title="CISA Known Exploited Vulnerability — actively exploited">KEV</span>' : ""}</td>
-          <td>${esc(f.package || "—")}</td>
-          <td>${sevBadge(f.severity)}</td>
-          <td>${f.cvss_score ?? "—"}</td>
-          <td class="nowrap small">${f.epss_score != null ? (f.epss_score * 100).toFixed(1) + "%" : "—"}</td>
-          <td>${esc(f.match_confidence)}<br><span class="muted small">${esc(f.match_reason)}</span></td>
-          <td>
-            <select class="btn-sm" onchange="ptSetFindingStatus(${f.id}, this.value)">
-              ${["open","confirmed","false_positive","fixed","accepted"].map((s) =>
-                `<option ${f.status===s?"selected":""}>${s}</option>`).join("")}
-            </select>
-          </td></tr>`).join("") ||
-        `<tr><td colspan="7" class="empty">No CVE findings correlated.</td></tr>`;
-
-      const webRows = webFindings.map((w) => `
-        <tr>
-          <td><b>${esc(w.name)}</b>${w.cve_id ? ` <a onclick="ptViewCve('${esc(w.cve_id)}')">${esc(w.cve_id)}</a>` : ""}
-            <br><span class="muted small">${esc(w.description)}</span>
-            ${w.evidence ? `<br><span class="muted small mono">${esc(w.evidence)}</span>` : ""}</td>
-          <td>${esc(w.category)}</td>
-          <td>${sevBadge(w.severity)}</td>
-          <td class="small">${esc(w.remediation)}</td>
-        </tr>`).join("") ||
-        `<tr><td colspan="4" class="empty">No web findings.</td></tr>`;
+      // Expose for the sort menus, then build initial (risk-sorted) rows via the shared builders.
+      window._sdFindings = findings; window._sdFindCap = FIND_CAP; window._sdWeb = webFindings;
+      const findRows = findings.slice(0, FIND_CAP).map(findingRowHtml).join("")
+        || `<tr><td colspan="7" class="empty">No CVE findings correlated.</td></tr>`;
+      const webRows = webFindings.map(webRowHtml).join("")
+        || `<tr><td colspan="4" class="empty">No web findings.</td></tr>`;
+      const findSort = sortMenu("ptSortFindings", [
+        ["risk", "Sort: Risk (KEV→sev→EPSS)"], ["severity", "Severity"], ["cvss", "CVSS"],
+        ["epss", "EPSS"], ["package", "Package"], ["cve", "CVE ID"], ["status", "Status"]]);
+      const webSort = sortMenu("ptSortWeb", [["severity", "Sort: Severity"], ["category", "Category"], ["name", "Name"]]);
 
       // Discovered hosts & open ports (network scans). The API returns hosts[].services[];
       // package-audit "services" (protocol "pkg") are excluded — they have their own table.
@@ -1264,25 +1321,23 @@
         <div id="scan-charts" class="chart-row"></div>
         <h3 class="section-title">Live scan log <span id="log-live"></span></h3>
         <pre id="scan-console" class="console"></pre>
-        ${showHosts ? `
-        <h3 class="section-title">Discovered hosts &amp; open ports (${scan.hosts.length} host${scan.hosts.length === 1 ? "" : "s"}${scan.scan_type !== "discovery" ? `, ${openPortCount} open port${openPortCount === 1 ? "" : "s"}` : ""})</h3>
-        <div class="table-wrap"><table class="fixed">
+        ${showHosts ? sectionHead("hosts", `Discovered hosts &amp; open ports (${scan.hosts.length} host${scan.hosts.length === 1 ? "" : "s"}${scan.scan_type !== "discovery" ? `, ${openPortCount} open port${openPortCount === 1 ? "" : "s"}` : ""})`)
+        + `<div class="sect-body" id="sect-hosts"><div class="table-wrap"><table class="fixed">
           <colgroup><col style="width:26%"><col style="width:13%"><col style="width:10%"><col style="width:19%"><col style="width:32%"></colgroup>
           <thead><tr><th>Host</th><th>Port</th><th>State</th><th>Service</th><th>Product / version</th></tr></thead>
-          <tbody>${hostRows || `<tr><td colspan="5" class="empty">No hosts up.</td></tr>`}</tbody></table></div>` : ""}
-        ${showCve ? `
-        <h3 class="section-title">CVE findings (${findings.length})</h3>
+          <tbody>${hostRows || `<tr><td colspan="5" class="empty">No hosts up.</td></tr>`}</tbody></table></div></div>` : ""}
+        ${showCve ? sectionHead("cve", `CVE findings (${findings.length})`, findSort)
+        + `<div class="sect-body" id="sect-cve">
         ${findings.length > FIND_CAP ? `<p class="muted small">Showing first ${FIND_CAP}. Use the Reports page or CSV export for the full set.</p>` : ""}
         <div class="table-wrap"><table class="fixed">
           <colgroup><col style="width:15%"><col style="width:13%"><col style="width:9%"><col style="width:6%"><col style="width:6%"><col style="width:36%"><col style="width:15%"></colgroup>
           <thead><tr><th>CVE</th><th>Package / service</th><th>Severity</th><th>CVSS</th><th title="EPSS: probability of exploitation in next 30 days">EPSS</th><th>Match / fix</th><th>Status</th></tr></thead>
-          <tbody>${findRows}</tbody></table></div>` : ""}
-        ${showWeb ? `
-        <h3 class="section-title">Web / URL findings (${webFindings.length})</h3>
-        <div class="table-wrap"><table class="fixed">
+          <tbody id="find-tbody">${findRows}</tbody></table></div></div>` : ""}
+        ${showWeb ? sectionHead("web", `Web / URL findings (${webFindings.length})`, webSort)
+        + `<div class="sect-body" id="sect-web"><div class="table-wrap"><table class="fixed">
           <colgroup><col style="width:40%"><col style="width:14%"><col style="width:10%"><col style="width:36%"></colgroup>
           <thead><tr><th>Finding</th><th>Category</th><th>Severity</th><th>Remediation</th></tr></thead>
-          <tbody>${webRows}</tbody></table></div>` : ""}
+          <tbody id="web-tbody">${webRows}</tbody></table></div></div>` : ""}
         ${scan.scan_type === "cis_benchmark" ? `
         <h3 class="section-title" style="margin-top:22px">CIS benchmark / hardening results <span id="cfg-count" class="muted small"></span></h3>
         <div id="cfg-box">${loading()}</div>` : ""}
@@ -1420,18 +1475,7 @@
           + (sevSegs.length ? chartCard("Failed controls by severity", svgBars(sevSegs)) : "");
       }
 
-      const rows = findings.map((f) => {
-        const st = f.status === "fail"
-          ? sevBadge(f.severity)
-          : (f.status === "pass" ? '<span class="status-badge status-completed">pass</span>'
-                                 : '<span class="status-badge">n/a</span>');
-        return `<tr>
-          <td>${st}</td>
-          <td><b>${esc(f.title)}</b><br><span class="muted small">${esc(f.detail)}</span>
-            ${f.evidence ? `<br><span class="muted small mono">${esc(f.evidence.slice(0, 160))}</span>` : ""}</td>
-          <td class="small">${f.status === "fail" ? esc(f.remediation) : "—"}</td>
-        </tr>`;
-      }).join("");
+      window._sdConfig = findings;
       const banner = `<div class="cis-banner">
         <div class="cis-chip"><span class="k">Distro</span><span class="v">${esc(m.distro || "unknown")}</span></div>
         <div class="cis-chip"><span class="k">Benchmark level</span><span class="v">${esc(m.level || "—")}</span></div>
@@ -1439,11 +1483,39 @@
         ${m.score != null ? `<div class="cis-chip score"><span class="k">Compliance</span><span class="v">${m.score}%</span></div>` : ""}
         <div class="cis-chip"><span class="k">Controls failed</span><span class="v" style="color:var(--high)">${data.fails} / ${findings.length}</span></div>
       </div>`;
-      box.innerHTML = banner + `<div class="table-wrap"><table class="fixed">
+      const cfgSort = sortMenu("ptSortConfig", [["status", "Sort: Failed first"], ["severity", "Severity"], ["result", "Result (pass/fail)"], ["title", "Check name"]]);
+      box.innerHTML = banner
+        + `<div style="display:flex;justify-content:flex-end;margin:6px 0">${cfgSort}</div>`
+        + `<div class="table-wrap"><table class="fixed">
         <colgroup><col style="width:12%"><col style="width:55%"><col style="width:33%"></colgroup>
         <thead><tr><th>Result</th><th>Check</th><th>Remediation</th></tr></thead>
-        <tbody>${rows}</tbody></table></div>`;
+        <tbody id="cfg-tbody"></tbody></table></div>`;
+      ptSortConfig("status");
     } catch (ex) { box.innerHTML = errBox(ex); }
+  };
+  function cfgRowHtml(f) {
+    const st = f.status === "fail" ? sevBadge(f.severity)
+      : (f.status === "pass" ? '<span class="status-badge status-completed">pass</span>'
+                             : '<span class="status-badge">n/a</span>');
+    return `<tr>
+      <td>${st}</td>
+      <td><b>${esc(f.title)}</b><br><span class="muted small">${esc(f.detail)}</span>
+        ${f.evidence ? `<br><span class="muted small mono">${esc(f.evidence.slice(0, 160))}</span>` : ""}</td>
+      <td class="small">${f.status === "fail" ? esc(f.remediation) : "—"}</td></tr>`;
+  }
+  window.ptSortConfig = (key) => {
+    const tb = document.getElementById("cfg-tbody");
+    if (!tb) return;
+    const sev = (f) => SEV_RANK[f.severity] || 0;
+    const statusRank = { fail: 2, info: 1, pass: 0 };
+    const cmps = {
+      status: (x, y) => (statusRank[y.status] || 0) - (statusRank[x.status] || 0) || sev(y) - sev(x),
+      severity: (x, y) => sev(y) - sev(x),
+      result: (x, y) => (x.status || "").localeCompare(y.status || ""),
+      title: (x, y) => (x.title || "").localeCompare(y.title || ""),
+    };
+    const rows = [...(window._sdConfig || [])].sort(cmps[key] || cmps.status);
+    tb.innerHTML = rows.map(cfgRowHtml).join("") || `<tr><td colspan="3" class="empty">No checks.</td></tr>`;
   };
 
   let pkgDebounce = null;

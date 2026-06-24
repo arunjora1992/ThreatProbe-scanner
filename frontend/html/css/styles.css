@@ -353,6 +353,14 @@ input:focus, select:focus, textarea:focus, .login-card input:focus { box-shadow:
   border-top: 1px solid var(--border); color: var(--muted); font-size: 12px;
 }
 
+/* ---- Collapsible result sections + sort controls ---- */
+.sect-head { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  flex-wrap: wrap; margin: 22px 0 10px; }
+.sect-head .section-title { user-select: none; }
+.sect-head .caret { display: inline-block; width: 1em; color: var(--primary); transition: transform .12s; }
+.sect-controls select { width: auto; padding: 5px 9px; font-size: 12px; }
+.sect-body { animation: fadeIn .15s ease; }
+
 /* ---- AI assistant widget ---- */
 .ai-fab {
   position: fixed; bottom: 24px; right: 24px; z-index: 150;
