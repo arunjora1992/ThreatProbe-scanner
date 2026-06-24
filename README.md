@@ -66,7 +66,7 @@ with vulnerability, severity, CVSS, and remediation details.
 - **Modern dashboard** — severity donut, scan-status chart, and a **Top priorities** panel (exploited / high-risk findings).
 - **Vibrant UI** — indigo/violet gradient theme with a consistent inline-SVG icon set per page (no external assets — air-gap safe), icon-led KPI cards, and brand-matched **PDF reports** (indigo header band, cyan accent, colour-coded severity).
 - **Live tool-level settings** — a tabbed Settings page exposes engine knobs with no `.env` edit or rebuild: nmap flags / SYN scan / scan timeout, ZAP crawl & active-scan limits, minimum severity shown, default CVE sort, scan auto-retention, session lifetime, password policy, and a **target scope allowlist** (CIDR/host globs that scans must match). Stored in the DB, read at runtime, with per-section *reset to defaults*.
-- **Offline AI assistant** — a built-in chat widget backed by a small local model (llama.cpp + a bundled quantized GGUF, **no internet**). It's **RAG-grounded**: every answer is built from this platform's own CVE DB / scan findings / package feeds, so it explains CVEs, summarises a scan, checks a package, and teaches vuln classes (XSS/SQLi/SSRF…) **without inventing facts**. Degrades gracefully to a deterministic DB summary if the model is offline (see below).
+- **Offline AI assistant** — a built-in chat widget backed by a small local model (llama.cpp + a bundled quantized GGUF, **no internet**). It can **launch scans conversationally** (guided wizard: target → type → credentials → confirm → auto-summary on completion) and answer questions **RAG-grounded** on this platform's own CVE DB / scan findings / package feeds — explains CVEs, summarises a scan, checks a package, teaches vuln classes (XSS/SQLi/SSRF…) **without inventing facts**. Credentials entered in chat are masked, in-memory only, and never stored/sent to the model. Degrades gracefully to a deterministic DB summary if the model is offline (see below).
 - **White-label branding** — set a custom **application name, logo, and favicon** (emoji or an uploaded PNG/SVG) from **Settings → Branding**; applied to the login page, sidebar, and browser tab. An in-app **About** page describes the tool.
 - **Dark / light theme** toggle (persisted per browser).
 
@@ -612,6 +612,14 @@ so the feature still works.
 
 What you can ask:
 
+- **Launch a scan, in chat** — e.g. `run a port scan on 10.0.0.5` or `start a credentialed
+  scan on web.lab.local`. A guided wizard collects the **target → scan type → details**
+  (SSH username/port and **password or key**, CIS level, or custom nmap flags), **auto-creates
+  the target** if it's new, launches via the standard scan API (role + scope-allowlist
+  enforced), then **watches the scan and posts a grounded result summary when it completes**.
+  Credential steps use a **masked field; the values are held in-memory only and are never
+  written to chat history / `localStorage` nor sent to the model** — they go straight to the
+  scan request and are dropped immediately. Viewers can't launch.
 - **Explain a CVE** — `explain CVE-2023-2975` → severity, CVSS, KEV/EPSS risk, affected
   products and remediation, pulled from your local CVE DB (with the CVE cited).
 - **Summarise a scan** — `summarise scan #12` → severity breakdown, top KEV/critical
@@ -621,8 +629,9 @@ What you can ask:
   CSP/HSTS, CORS, clickjacking — what it is and how to fix it.
 
 Architecture: a `llm` service (llama.cpp server, OpenAI-compatible API) serves a GGUF model
-from `./data/models`; the backend's `/api/assistant/chat` builds the grounded prompt. The
-model phrases; the DB supplies facts.
+from `./data/models`; the backend's `/api/assistant/chat` builds the grounded prompt and the
+read-only retrieval tools. The scan launcher is a client-side wizard over the existing
+`/api/targets` + `/api/scans` endpoints. The model phrases; the DB supplies facts.
 
 **Model & resources.** Default model is **Qwen2.5-1.5B-Instruct (Q4_K_M, ~1 GB)**; the
 `llm` container is capped at 3 GB RAM. Swap models by dropping another GGUF in

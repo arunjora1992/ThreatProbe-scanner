@@ -1849,7 +1849,7 @@
         ${feat("🛡️", "CIS benchmark / hardening", "Official CIS profiles via OpenSCAP (auto-installed) with L1/L2 Server/Workstation levels, plus a built-in agentless fallback.")}
         ${feat("🎯", "Risk prioritization", "CISA KEV (exploited-in-the-wild) flags + FIRST EPSS scores rank what to fix first — not just CVSS.")}
         ${feat("🗓️", "Scheduling &amp; reports", "Recurring scheduled scans, live scan logs, per-type PDF/CSV reports with charts, and emailed reports.")}
-        ${feat("🤖", "Offline AI assistant", "A bundled local model (no internet) answers questions grounded on your own CVE DB and scan results — explains CVEs, summarises scans, teaches vuln classes.")}
+        ${feat("🤖", "Offline AI assistant", "A bundled local model (no internet) that <b>launches scans for you in chat</b> and answers questions grounded on your own CVE DB and scan results — explains CVEs, summarises scans, teaches vuln classes.")}
         ${feat("⚙️", "Live tool-level settings", "Tune the engine from the GUI — scan flags, ZAP limits, severity floor, retention, session policy, target scope — no redeploy.")}
       </div>
 
@@ -1863,6 +1863,7 @@
         that. If the model is ever offline, it falls back to a deterministic database summary.</p>
         <div class="about-stats" style="margin-top:6px"><b>Use cases</b></div>
         <ul class="about-list" style="margin-top:8px">
+          <li>🚀 <b>Launch a scan in chat</b> — "run a port scan on 10.0.0.5": it asks for the target, scan type and any credentials, auto-creates the target, starts the scan, and posts the result when it finishes. Credentials are entered in a masked field, used in-memory only, and never stored or sent to the model.</li>
           <li>💬 <b>Explain a CVE</b> — "explain CVE-2023-2975": severity, CVSS, KEV/EPSS risk, affected products, and the fix, from your local CVE DB.</li>
           <li>📊 <b>Summarise a scan</b> — "summarise scan #12": severity breakdown, top KEV/critical findings, web findings, failed CIS controls.</li>
           <li>📦 <b>Check a package</b> — backport-aware: which advisories affect a package and the distro-fixed version.</li>
