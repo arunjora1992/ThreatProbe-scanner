@@ -345,6 +345,14 @@ input:focus, select:focus, textarea:focus, .login-card input:focus { box-shadow:
 .cis-chip .v { font-size: 15px; font-weight: 700; }
 .cis-chip.score .v { background-image: var(--grad); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
 
+/* ---- Global page footer (copyright on every page) ---- */
+.content { display: flex; flex-direction: column; min-height: 100vh; }
+.content > #view { flex: 1 0 auto; }
+.app-footer {
+  flex: none; margin-top: 28px; padding: 16px 0 4px; text-align: center;
+  border-top: 1px solid var(--border); color: var(--muted); font-size: 12px;
+}
+
 /* ---- AI assistant widget ---- */
 .ai-fab {
   position: fixed; bottom: 24px; right: 24px; z-index: 150;

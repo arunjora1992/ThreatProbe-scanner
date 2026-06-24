@@ -125,6 +125,7 @@ def _cve_block(c: CVE) -> str:
 def retrieve(db: Session, message: str) -> dict:
     """Pull authoritative facts for entities mentioned in the message."""
     blocks, citations = [], []
+    scan_summary = None
 
     # ---- CVE IDs ----
     for cid in dict.fromkeys(m.upper() for m in CVE_RE.findall(message)):
@@ -135,38 +136,18 @@ def retrieve(db: Session, message: str) -> dict:
         else:
             blocks.append(f"[CVE] {cid}: not present in the local CVE database.")
 
-    # ---- scan #N ----
+    # ---- scan #N (deterministic summary — small models misread aggregate counts) ----
     sm = SCAN_RE.search(message)
     if sm:
         sid = int(sm.group(1))
         scan = db.get(Scan, sid)
         if not scan:
-            blocks.append(f"[SCAN] Scan #{sid} not found.")
+            blocks.append(f"[SCAN] Scan #{sid} not found in the database.")
+            scan_summary = f"I have no record of scan #{sid} in the database."
         else:
             citations.append(f"scan#{sid}")
-            finds = db.query(Finding).filter(Finding.scan_id == sid).all()
-            sev_counts = {}
-            for f in finds:
-                sev_counts[f.severity] = sev_counts.get(f.severity, 0) + 1
-            web = db.query(WebFinding).filter(WebFinding.scan_id == sid).count()
-            cfg = db.query(ConfigFinding).filter(ConfigFinding.scan_id == sid,
-                                                 ConfigFinding.status == "fail").count()
-            line = (f"[SCAN] #{sid} type={scan.scan_type} status={scan.status}; "
-                    f"CVE findings={len(finds)} ({', '.join(f'{k}:{v}' for k, v in sev_counts.items()) or 'none'}); "
-                    f"web findings={web}; failed CIS controls={cfg}.")
-            blocks.append(line)
-            # Top findings by KEV/severity
-            cve_ids = {f.cve_id for f in finds}
-            intel = {c.cve_id: c for c in db.query(CVE).filter(CVE.cve_id.in_(cve_ids)).all()} if cve_ids else {}
-            rank = {"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1}
-            finds.sort(key=lambda f: (1 if (intel.get(f.cve_id) and intel[f.cve_id].kev) else 0,
-                                      rank.get(f.severity, 0)), reverse=True)
-            for f in finds[:8]:
-                svc = f.service
-                pkg = (svc.product or svc.service_name or "") if svc else ""
-                c = intel.get(f.cve_id)
-                tag = " [KEV]" if (c and c.kev) else ""
-                blocks.append(f"  - {f.cve_id} ({f.severity}) on {pkg or 'asset'}{tag}")
+            scan_summary = _scan_summary(db, scan)
+            blocks.append("[SCAN] " + scan_summary.replace("\n", " "))
 
     # ---- package name ----
     if not citations:  # only if nothing more specific matched
@@ -191,7 +172,70 @@ def retrieve(db: Session, message: str) -> dict:
             seen.add(title)
             blocks.append(f"[CLASS] {title}: {what} Fix: {fix}")
 
-    return {"blocks": blocks, "citations": list(dict.fromkeys(citations))}
+    return {"blocks": blocks, "citations": list(dict.fromkeys(citations)),
+            "scan_summary": scan_summary}
+
+
+def _scan_summary(db: Session, scan) -> str:
+    """A deterministic, human-readable summary of a scan's results (no model involved,
+    so aggregate counts are always correct)."""
+    sid = scan.id
+    finds = db.query(Finding).filter(Finding.scan_id == sid).all()
+    web = db.query(WebFinding).filter(WebFinding.scan_id == sid).all()
+    cfgs = [c for c in db.query(ConfigFinding).filter(ConfigFinding.scan_id == sid).all()
+            if c.check_id != "audit-summary"]
+    lines = [f"**Scan #{sid} — {scan.scan_type}** · status: {scan.status}."]
+
+    if scan.scan_type == "cis_benchmark":
+        from .cis_runner import summarize_cis
+        m = summarize_cis(db, scan)
+        score = f"{m['score']:.0f}%" if m["score"] is not None else "n/a"
+        lines.append(f"Host/distro: {m['distro']} · Benchmark: {m['level']} · Engine: {m['engine']} "
+                     f"· Compliance score: {score}.")
+        lines.append(f"**{m['fails']} failed** of {m['total']} controls checked.")
+        fails = [c for c in cfgs if c.status == "fail"]
+        rank = {"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1, "INFO": 0}
+        fails.sort(key=lambda c: rank.get(c.severity, 0), reverse=True)
+        if fails:
+            lines.append("Top failed controls:")
+            for c in fails[:8]:
+                lines.append(f"• [{c.severity}] {c.title or c.check_id}")
+        return "\n".join(lines)
+
+    # Network / credentialed (CVE) + web findings
+    if finds:
+        sev = {}
+        for f in finds:
+            sev[f.severity] = sev.get(f.severity, 0) + 1
+        order = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO", "NONE", "UNKNOWN"]
+        brk = ", ".join(f"{k} {sev[k]}" for k in order if sev.get(k))
+        lines.append(f"**{len(finds)} CVE finding(s)** ({brk}).")
+        cve_ids = {f.cve_id for f in finds}
+        intel = {c.cve_id: c for c in db.query(CVE).filter(CVE.cve_id.in_(cve_ids)).all()} if cve_ids else {}
+        kev = [f for f in finds if intel.get(f.cve_id) and intel[f.cve_id].kev]
+        if kev:
+            lines.append(f"⚠ {len(kev)} are actively exploited (CISA KEV).")
+        rank = {"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1}
+        finds.sort(key=lambda f: (1 if (intel.get(f.cve_id) and intel[f.cve_id].kev) else 0,
+                                  rank.get(f.severity, 0), f.cvss_score or 0), reverse=True)
+        lines.append("Top findings:")
+        for f in finds[:8]:
+            svc = f.service
+            pkg = (svc.product or svc.service_name or "") if svc else ""
+            tag = " [KEV]" if (intel.get(f.cve_id) and intel[f.cve_id].kev) else ""
+            lines.append(f"• {f.cve_id} ({f.severity}) on {pkg or 'asset'}{tag}")
+    elif scan.scan_type in ("discovery", "port", "full", "custom", "credentialed"):
+        lines.append("No CVE findings were correlated.")
+
+    if web:
+        sevw = {}
+        for w in web:
+            sevw[w.severity] = sevw.get(w.severity, 0) + 1
+        brk = ", ".join(f"{k} {v}" for k, v in sevw.items())
+        lines.append(f"**{len(web)} web finding(s)** ({brk}).")
+        for w in web[:6]:
+            lines.append(f"• {w.name} [{w.category}] — {w.severity}")
+    return "\n".join(lines)
 
 
 _SYSTEM = (
@@ -215,6 +259,11 @@ def _fallback(message: str, ctx: dict) -> str:
 def answer(db: Session, message: str, history: list | None = None) -> dict:
     """Return {'reply': str, 'citations': [...], 'grounded': bool, 'model': bool}."""
     ctx = retrieve(db, message)
+    # Scan summaries are returned deterministically — a small model misreads aggregate
+    # counts (e.g. inverting "6 failed" into "no failures"), which is unacceptable here.
+    if ctx.get("scan_summary"):
+        return {"reply": ctx["scan_summary"], "citations": ctx["citations"],
+                "grounded": True, "model": False}
     context_text = "\n".join(ctx["blocks"]) if ctx["blocks"] else "(no matching local records)"
     if not llm_available():
         return {"reply": _fallback(message, ctx), "citations": ctx["citations"],

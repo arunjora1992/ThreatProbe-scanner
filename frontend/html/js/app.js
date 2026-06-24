@@ -85,6 +85,36 @@
   function chartCard(title, inner) {
     return `<div class="card chart-card"><div class="muted small" style="margin-bottom:6px">${esc(title)}</div>${inner}</div>`;
   }
+  // Responsive area+line chart from items [{label,value}]. Gradient fill, dots, x labels.
+  function svgArea(items, stroke) {
+    const W = 640, H = 170, padX = 14, padTop = 14, padBot = 26;
+    const n = items.length;
+    const max = Math.max(1, ...items.map((i) => i.value));
+    const iw = W - padX * 2, ih = H - padTop - padBot;
+    const X = (i) => padX + (n <= 1 ? iw / 2 : (iw * i) / (n - 1));
+    const Y = (v) => padTop + ih * (1 - v / max);
+    const pts = items.map((it, i) => `${X(i).toFixed(1)},${Y(it.value).toFixed(1)}`).join(" ");
+    const areaPts = `${padX},${(padTop + ih).toFixed(1)} ${pts} ${(padX + iw).toFixed(1)},${(padTop + ih).toFixed(1)}`;
+    const gridY = padTop + ih;
+    const dots = items.map((it, i) =>
+      `<circle cx="${X(i).toFixed(1)}" cy="${Y(it.value).toFixed(1)}" r="${it.value ? 2.6 : 0}" fill="${stroke}"></circle>`).join("");
+    // Label every ~Nth point so they don't collide.
+    const step = Math.ceil(n / 7);
+    const labels = items.map((it, i) => (i % step === 0 || i === n - 1)
+      ? `<text x="${X(i).toFixed(1)}" y="${H - 8}" text-anchor="middle" font-size="9" fill="var(--muted)">${esc(it.label)}</text>` : "").join("");
+    const total = items.reduce((a, x) => a + x.value, 0);
+    return `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none" role="img">
+      <defs><linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="${stroke}" stop-opacity=".35"/>
+        <stop offset="1" stop-color="${stroke}" stop-opacity="0"/></linearGradient></defs>
+      <line x1="${padX}" y1="${gridY}" x2="${padX + iw}" y2="${gridY}" stroke="var(--border)" stroke-width="1"/>
+      <polygon points="${areaPts}" fill="url(#areaGrad)"/>
+      <polyline points="${pts}" fill="none" stroke="${stroke}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+      ${dots}${labels}
+      <text x="${padX}" y="${padTop + 2}" font-size="10" fill="var(--muted)">peak ${max}</text>
+      <text x="${padX + iw}" y="${padTop + 2}" text-anchor="end" font-size="10" fill="var(--muted)">${total} total</text>
+    </svg>`;
+  }
   function legend(items) {
     return `<div class="legend">` + items.filter(i => i.value > 0).map((i) =>
       `<span><i style="background:${i.color}"></i>${esc(i.label)} ${i.value}</span>`).join("") + `</div>`;
@@ -123,6 +153,7 @@
     });
     loadToolSettings();
     buildAssistant();
+    startScanNotifier();
     navigateFromUrl();
   }
   // Cache of GUI-tunable tool settings (flat {key:value}); used for defaults elsewhere.
@@ -135,6 +166,48 @@
       window._tool = flat;
       if (_aiBuilt) applyAssistantEnabled();
     } catch (ex) { /* defaults apply until loaded */ }
+  }
+
+  // ---------- Global scan-completion notifier ----------
+  // Polls scans app-wide (independent of the Scans page) and notifies on completion via
+  // an in-app toast + a browser notification. Primes silently on login so it doesn't
+  // announce scans that already finished before you logged in.
+  let _notifyTimer = null;
+  let _scanStates = {};
+  let _notifierPrimed = false;
+  const _TERMINAL = ["completed", "failed", "cancelled"];
+  function startScanNotifier() {
+    if (_notifyTimer) clearInterval(_notifyTimer);
+    _scanStates = {}; _notifierPrimed = false;
+    try {
+      if ("Notification" in window && Notification.permission === "default") Notification.requestPermission();
+    } catch (e) { /* permission prompt may need a gesture; toasts still work */ }
+    pollScanNotifications();
+    _notifyTimer = setInterval(pollScanNotifications, 8000);
+  }
+  function stopScanNotifier() { if (_notifyTimer) { clearInterval(_notifyTimer); _notifyTimer = null; } }
+  async function pollScanNotifications() {
+    let scans;
+    try { scans = await API.get("/api/scans"); } catch (e) { return; }
+    scans.forEach((s) => {
+      const prev = _scanStates[s.id];
+      if (_notifierPrimed && prev && !_TERMINAL.includes(prev) && _TERMINAL.includes(s.status)) {
+        notifyScan(s);
+      }
+      _scanStates[s.id] = s.status;
+    });
+    _notifierPrimed = true;
+  }
+  function notifyScan(s) {
+    const extra = s.status === "completed" ? ` — ${s.result_count || 0} result(s)` : "";
+    const msg = `Scan #${s.id} (${s.scan_type}) ${s.status}${extra}`;
+    toast(msg, s.status === "failed" ? "err" : "ok");
+    try {
+      if ("Notification" in window && Notification.permission === "granted") {
+        const n = new Notification("ThreatProbe Scanner", { body: msg });
+        n.onclick = () => { window.focus(); ptOpenScan(s.id); };
+      }
+    } catch (e) { /* toast already shown */ }
   }
 
   // ---------- Offline AI assistant (floating chat widget) ----------
@@ -460,6 +533,7 @@
   }
   function showLogin() {
     stopPolling();
+    stopScanNotifier();
     document.getElementById("app-view").classList.add("hidden");
     document.getElementById("login-view").classList.remove("hidden");
   }
@@ -551,12 +625,24 @@
           <div class="stat-top"><div class="stat-num">${n}</div><div class="stat-ic">${icon(ic)}</div></div>
           <div class="stat-label">${l}</div></div>`).join("");
 
-      // Scan-status breakdown bars.
+      // Scan-status breakdown (donut).
       const ss = s.scan_status || {};
-      const ssColor = { completed: "var(--ok)", running: "var(--med)", queued: "var(--low)",
-                        failed: "var(--high)", cancelled: "var(--muted)" };
-      const ssItems = Object.keys(ss).sort((a, b) => ss[b] - ss[a])
-        .map((k) => ({ label: k, value: ss[k], color: ssColor[k] || "var(--info)" }));
+      const ssColor = { completed: "#16a34a", running: "#f59e0b", queued: "#3b82f6",
+                        failed: "#ef4444", cancelled: "#64748b" };
+      const ssSegs = Object.keys(ss).sort((a, b) => ss[b] - ss[a])
+        .map((k) => ({ label: k, value: ss[k], color: ssColor[k] || "#64748b" }));
+      const ssTotal = ssSegs.reduce((a, x) => a + x.value, 0);
+
+      // Scans by type (donut).
+      const stp = ["#6366f1", "#8b5cf6", "#d946ef", "#22d3ee", "#f59e0b", "#3b82f6", "#ef4444", "#16a34a", "#64748b"];
+      const stMap = s.scan_types || {};
+      const stSegs = Object.keys(stMap).sort((a, b) => stMap[b] - stMap[a])
+        .map((k, i) => ({ label: k, value: stMap[k], color: stp[i % stp.length] }));
+      const stTotal = stSegs.reduce((a, x) => a + x.value, 0);
+
+      // 14-day scan activity (area chart).
+      const trend = s.scans_trend || [];
+      const trendTotal = trend.reduce((a, x) => a + (x.count || 0), 0);
 
       // Top priorities (KEV / high-risk findings).
       const topRows = (s.top_risk || []).map((f) => `
@@ -582,7 +668,16 @@
             sevTotal ? `<div class="donut-wrap">${svgDonut(segs, String(sevTotal), "findings")}${legend(segs)}</div>`
                      : `<p class="muted small">No findings yet — run a scan to populate.</p>`)}
           ${chartCard("Scans by status",
-            ssItems.length ? svgBars(ssItems) : `<p class="muted small">No scans yet.</p>`)}
+            ssTotal ? `<div class="donut-wrap">${svgDonut(ssSegs, String(ssTotal), "scans")}${legend(ssSegs)}</div>`
+                    : `<p class="muted small">No scans yet.</p>`)}
+          ${chartCard("Scans by type",
+            stTotal ? `<div class="donut-wrap">${svgDonut(stSegs, String(stTotal), "scans")}${legend(stSegs)}</div>`
+                    : `<p class="muted small">No scans yet.</p>`)}
+        </div>
+        <div class="chart-row">
+          ${chartCard("Scan activity · last 14 days",
+            trendTotal ? svgArea(trend.map((t) => ({ label: t.date, value: t.count })), "var(--primary)")
+                       : `<p class="muted small">No scans in the last 14 days.</p>`)}
         </div>
         <h3 class="section-title">🎯 Top priorities (exploited / high-risk)</h3>
         <div class="table-wrap"><table class="fixed">
@@ -1924,6 +2019,13 @@
       const ll = document.getElementById("login-logo"); if (ll) ll.innerHTML = _logoHtml(b, 56);
       const br = document.getElementById("brand");
       if (br) br.innerHTML = `${_logoHtml(b, 24)} <span>${esc(name)}</span>`;
+      // Copyright on every surface (login, sidebar, page footer) — dynamic year + brand.
+      const cr = `© ${new Date().getFullYear()} ${name}`;
+      ["login-copyright", "side-copyright"].forEach((id) => {
+        const el = document.getElementById(id); if (el) el.textContent = cr;
+      });
+      const ft = document.getElementById("app-footer");
+      if (ft) ft.textContent = `${cr} — for authorized security testing only.`;
       // Favicon: custom favicon, else the uploaded logo, else the modern default shield —
       // so the browser tab always shows a crisp icon (never blank).
       const favUrl = b.favicon_data_url || b.logo_data_url || BRAND_URI;

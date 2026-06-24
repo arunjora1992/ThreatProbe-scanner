@@ -1,4 +1,6 @@
 """Dashboard aggregate statistics."""
+from datetime import datetime, timedelta
+
 from fastapi import APIRouter, Depends
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -15,6 +17,21 @@ def stats(db: Session = Depends(get_db), _: User = Depends(get_current_user)):
     scan_status = dict(
         db.query(Scan.status, func.count(Scan.id)).group_by(Scan.status).all()
     )
+    scan_types = dict(
+        db.query(Scan.scan_type, func.count(Scan.id)).group_by(Scan.scan_type).all()
+    )
+    # Scan activity over the last 14 days (one bucket per day, zero-filled).
+    today = datetime.utcnow().date()
+    since = today - timedelta(days=13)
+    trend_rows = (db.query(func.date(Scan.created_at), func.count(Scan.id))
+                  .filter(Scan.created_at >= datetime(since.year, since.month, since.day))
+                  .group_by(func.date(Scan.created_at)).all())
+    by_day = {str(d): int(c) for d, c in trend_rows}
+    scans_trend = [
+        {"date": (since + timedelta(days=i)).strftime("%m-%d"),
+         "count": by_day.get(str(since + timedelta(days=i)), 0)}
+        for i in range(14)
+    ]
     finding_sev = dict(
         db.query(Finding.severity, func.count(Finding.id)).group_by(Finding.severity).all()
     )
@@ -75,6 +92,8 @@ def stats(db: Session = Depends(get_db), _: User = Depends(get_current_user)):
         "kev_findings": kev_findings,
         "crit_high_open": crit_high_open,
         "scan_status": scan_status,
+        "scan_types": scan_types,
+        "scans_trend": scans_trend,
         "severity_breakdown": combined,
         "top_risk": top_risk,
         "recent_scans": recent_out,
