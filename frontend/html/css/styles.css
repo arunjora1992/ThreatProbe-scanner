@@ -360,6 +360,9 @@ input:focus, select:focus, textarea:focus, .login-card input:focus { box-shadow:
 .sect-head .caret { display: inline-block; width: 1em; color: var(--primary); transition: transform .12s; }
 .sect-controls select { width: auto; padding: 5px 9px; font-size: 12px; }
 .sect-body { animation: fadeIn .15s ease; }
+/* Click-to-sort table headers */
+th[onclick]:hover { color: var(--text); background: color-mix(in srgb, var(--primary) 10%, transparent); }
+.sort-arr { color: var(--primary); font-size: 10px; }
 
 /* ---- AI assistant widget ---- */
 .ai-fab {

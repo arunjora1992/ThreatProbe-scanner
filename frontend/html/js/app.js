@@ -188,6 +188,37 @@
     const rows = [...(window._sdWeb || [])].sort(cmps[key] || cmps.severity);
     tb.innerHTML = rows.map(webRowHtml).join("") || `<tr><td colspan="4" class="empty">No web findings.</td></tr>`;
   };
+
+  // ---------- generic click-to-sort tables ----------
+  // cols: [{label, field?, get?, type: 'text'|'num'|'sev', title?}]
+  const _sortReg = {};
+  const _sortState = {};
+  function sortableThead(key, cols) {
+    return "<thead><tr>" + cols.map((c, i) =>
+      `<th onclick="ptColSort('${key}',${i})" style="cursor:pointer;user-select:none"${c.title ? ` title="${esc(c.title)}"` : ""}>${esc(c.label)} <span class="sort-arr" id="arr-${key}-${i}"></span></th>`).join("") + "</tr></thead>";
+  }
+  function registerSortable(key, data, cols, rowFn, tbodyId, empty) {
+    _sortReg[key] = { data, cols, rowFn, tbodyId, empty: empty || "" };
+    _sortState[key] = { col: -1, dir: 1 };
+  }
+  window.ptColSort = (key, col) => {
+    const reg = _sortReg[key];
+    if (!reg) return;
+    const st = _sortState[key] || { col: -1, dir: 1 };
+    const dir = st.col === col ? -st.dir : 1;
+    _sortState[key] = { col, dir };
+    const c = reg.cols[col];
+    const val = (r) => {
+      let v = c.get ? c.get(r) : r[c.field];
+      if (c.type === "sev") return SEV_RANK[v] || 0;
+      if (c.type === "num") return (v == null || v === "") ? -Infinity : Number(v);
+      return (v == null ? "" : String(v)).toLowerCase();
+    };
+    const sorted = [...reg.data].sort((a, b) => { const x = val(a), y = val(b); return x < y ? -dir : x > y ? dir : 0; });
+    const tb = document.getElementById(reg.tbodyId);
+    if (tb) tb.innerHTML = sorted.map(reg.rowFn).join("") || reg.empty;
+    reg.cols.forEach((_, i) => { const el = document.getElementById(`arr-${key}-${i}`); if (el) el.textContent = i === col ? (dir > 0 ? "▲" : "▼") : ""; });
+  };
   function legend(items) {
     return `<div class="legend">` + items.filter(i => i.value > 0).map((i) =>
       `<span><i style="background:${i.color}"></i>${esc(i.label)} ${i.value}</span>`).join("") + `</div>`;
@@ -1531,21 +1562,31 @@
       if (q) params.set("q", q);
       const data = await API.get(`/api/scans/${id}/packages?` + params.toString());
       const PKG_CAP = 500;
-      const rows = data.packages.slice(0, PKG_CAP).map((p) => `
-        <tr>
-          <td><b>${esc(p.name)}</b></td>
-          <td class="mono">${esc(p.full_version || p.version)}</td>
-          <td>${p.status === "vulnerable" ? sevBadge(p.max_severity) : '<span class="status-badge status-completed">ok</span>'}</td>
-          <td>${p.max_cvss ?? "—"}</td>
-          <td class="small">${p.cve_ids ? p.cve_ids.split(", ").map((c) => `<a onclick="ptViewCve('${esc(c)}')">${esc(c)}</a>`).join(", ") : "—"}</td>
-          <td class="small">${esc(p.remediation)}</td>
-        </tr>`).join("") || `<tr><td colspan="6" class="empty">No packages.</td></tr>`;
-      box.innerHTML = `<div class="muted small" style="margin-bottom:6px">${data.total} packages · <b style="color:var(--high)">${data.vulnerable} vulnerable</b>${data.total > PKG_CAP ? ` · showing first ${PKG_CAP} (download CSV for all)` : ""}</div>
-        <div class="table-wrap"><table>
-        <thead><tr><th>Package</th><th>Version</th><th>Criticality</th><th>Max CVSS</th><th>CVEs</th><th>Patching remedy</th></tr></thead>
-        <tbody>${rows}</tbody></table></div>`;
+      const shown = data.packages.slice(0, PKG_CAP);
+      const empty = `<tr><td colspan="6" class="empty">No packages.</td></tr>`;
+      const cols = [
+        { label: "Package", field: "name", type: "text" },
+        { label: "Version", type: "text", get: (p) => p.full_version || p.version },
+        { label: "Criticality", field: "max_severity", type: "sev" },
+        { label: "Max CVSS", field: "max_cvss", type: "num" },
+        { label: "CVEs", type: "num", get: (p) => (p.cve_ids ? p.cve_ids.split(", ").length : 0) },
+        { label: "Patching remedy", field: "remediation", type: "text" },
+      ];
+      registerSortable("pkg", shown, cols, pkgRowHtml, "pkg-tbody", empty);
+      box.innerHTML = `<div class="muted small" style="margin-bottom:6px">${data.total} packages · <b style="color:var(--high)">${data.vulnerable} vulnerable</b>${data.total > PKG_CAP ? ` · showing first ${PKG_CAP} (download CSV for all)` : ""} · click a column to sort</div>
+        <div class="table-wrap"><table>${sortableThead("pkg", cols)}
+        <tbody id="pkg-tbody">${shown.map(pkgRowHtml).join("") || empty}</tbody></table></div>`;
     } catch (ex) { box.innerHTML = errBox(ex); }
   };
+  function pkgRowHtml(p) {
+    return `<tr>
+      <td><b>${esc(p.name)}</b></td>
+      <td class="mono">${esc(p.full_version || p.version)}</td>
+      <td>${p.status === "vulnerable" ? sevBadge(p.max_severity) : '<span class="status-badge status-completed">ok</span>'}</td>
+      <td>${p.max_cvss ?? "—"}</td>
+      <td class="small">${p.cve_ids ? p.cve_ids.split(", ").map((c) => `<a onclick="ptViewCve('${esc(c)}')">${esc(c)}</a>`).join(", ") : "—"}</td>
+      <td class="small">${esc(p.remediation)}</td></tr>`;
+  }
 
   // ---------- CVEs ----------
   async function renderCves() {
@@ -1670,20 +1711,30 @@
       params.set("sort", (window._tool || {}).match_default_sort || "risk");
       params.set("limit", "200");
       const cves = await API.get("/api/cves?" + params.toString());
-      const rows = cves.map((c) => `
-        <tr onclick="ptViewCve('${esc(c.cve_id)}')" style="cursor:pointer">
-          <td class="mono nowrap">${esc(c.cve_id)}${c.kev ? ' <span class="sev-badge sev-critical" title="CISA Known Exploited Vulnerability">KEV</span>' : ""}</td>
-          <td>${sevBadge(c.severity)}</td>
-          <td>${c.cvss_v3_score ?? "—"}</td>
-          <td class="nowrap small">${c.epss_score != null ? (c.epss_score * 100).toFixed(1) + "%" : "—"}</td>
-          <td class="nowrap small">${esc(c.cwe || "—")}</td>
-          <td>${esc((c.description || "").slice(0, 110))}…</td></tr>`).join("") ||
-        `<tr><td colspan="6" class="empty">No matching CVEs.</td></tr>`;
-      box.innerHTML = `<div class="table-wrap"><table>
-        <thead><tr><th>CVE</th><th>Severity</th><th>CVSS</th><th title="EPSS: probability of exploitation in next 30 days">EPSS</th><th>Type (CWE)</th><th>Description</th></tr></thead>
-        <tbody>${rows}</tbody></table></div>`;
+      const empty = `<tr><td colspan="6" class="empty">No matching CVEs.</td></tr>`;
+      const cols = [
+        { label: "CVE", field: "cve_id", type: "text" },
+        { label: "Severity", field: "severity", type: "sev" },
+        { label: "CVSS", field: "cvss_v3_score", type: "num" },
+        { label: "EPSS", field: "epss_score", type: "num", title: "EPSS: probability of exploitation in next 30 days" },
+        { label: "Type (CWE)", field: "cwe", type: "text" },
+        { label: "Description", field: "description", type: "text" },
+      ];
+      registerSortable("cvedb", cves, cols, cveDbRowHtml, "cvedb-tbody", empty);
+      box.innerHTML = `<div class="table-wrap"><table>${sortableThead("cvedb", cols)}
+        <tbody id="cvedb-tbody">${cves.map(cveDbRowHtml).join("") || empty}</tbody></table></div>
+        <p class="muted small" style="margin-top:6px">Click a column header to sort.</p>`;
     } catch (ex) { box.innerHTML = errBox(ex); }
   };
+  function cveDbRowHtml(c) {
+    return `<tr onclick="ptViewCve('${esc(c.cve_id)}')" style="cursor:pointer">
+      <td class="mono nowrap">${esc(c.cve_id)}${c.kev ? ' <span class="sev-badge sev-critical" title="CISA Known Exploited Vulnerability">KEV</span>' : ""}</td>
+      <td>${sevBadge(c.severity)}</td>
+      <td>${c.cvss_v3_score ?? "—"}</td>
+      <td class="nowrap small">${c.epss_score != null ? (c.epss_score * 100).toFixed(1) + "%" : "—"}</td>
+      <td class="nowrap small">${esc(c.cwe || "—")}</td>
+      <td>${esc((c.description || "").slice(0, 110))}…</td></tr>`;
+  }
   window.ptViewCve = async (cveId) => {
     modal(cveId, loading());
     try {
