@@ -28,7 +28,9 @@ CVE_RE = re.compile(r"CVE-\d{4}-\d{3,7}", re.I)
 SCAN_RE = re.compile(r"scan\s*#?\s*(\d+)", re.I)
 PKG_RE = re.compile(r"(?:package|is|about)\s+([a-zA-Z0-9][\w.+-]{1,40})", re.I)
 HOST_RE = re.compile(r"https?://([^/\s]+)|\b(\d{1,3}(?:\.\d{1,3}){3})\b|\b((?:[a-z0-9-]+\.)+[a-z]{2,})\b", re.I)
-SCAN_INTENT_RE = re.compile(r"\b(scan|result|audit|finding|vulnerab|compliance|report|assessment)\b", re.I)
+# Stems (no trailing \b) so "summarise", "vulnerability", "findings", "scanning" all match.
+SCAN_INTENT_RE = re.compile(
+    r"\b(scan|result|audit|finding|vulnerab|compliance|report|assessment|summar|show)\w*", re.I)
 
 
 def _extract_host(message: str):
@@ -143,7 +145,11 @@ def retrieve(db: Session, message: str) -> dict:
         else:
             blocks.append(f"[CVE] {cid}: not present in the local CVE database.")
 
-    # ---- scan #N (deterministic summary — small models misread aggregate counts) ----
+    # ---- scan: explicit '#N', by target IP/host, or a bare number with scan intent ----
+    # (Deterministic — a small model misreads aggregate counts.) CVE digits and IP octets
+    # are excluded so e.g. "scan result of 89" -> scan #89, not a target IP.
+    scan = None
+    note = ""
     sm = SCAN_RE.search(message)
     if sm:
         sid = int(sm.group(1))
@@ -151,27 +157,27 @@ def retrieve(db: Session, message: str) -> dict:
         if not scan:
             blocks.append(f"[SCAN] Scan #{sid} not found in the database.")
             scan_summary = f"I have no record of scan #{sid} in the database."
-        else:
-            citations.append(f"scan#{sid}")
-            scan_summary = _scan_summary(db, scan)
-            blocks.append("[SCAN] " + scan_summary.replace("\n", " "))
-
-    # ---- scan referenced by target IP/host (no scan number given) ----
-    if scan_summary is None and SCAN_INTENT_RE.search(message):
+    elif SCAN_INTENT_RE.search(message):
         host = _extract_host(message)
         if host:
             from ..models import Target
             target = (db.query(Target)
-                      .filter(func.lower(Target.address).like(f"%{host.lower()}%"))
-                      .first())
+                      .filter(func.lower(Target.address).like(f"%{host.lower()}%")).first())
             if target:
-                latest = (db.query(Scan).filter(Scan.target_id == target.id)
-                          .order_by(Scan.created_at.desc()).first())
-                if latest:
-                    citations.append(f"scan#{latest.id}")
-                    scan_summary = _scan_summary(db, latest)
-                    blocks.append(f"[SCAN] (latest scan for {host}) "
-                                  + scan_summary.replace("\n", " "))
+                scan = (db.query(Scan).filter(Scan.target_id == target.id)
+                        .order_by(Scan.created_at.desc()).first())
+                note = f" (latest scan for {host})"
+        if scan is None and not CVE_RE.search(message):
+            # a standalone integer not embedded in an IP/CVE -> a scan id
+            nm = re.search(r"(?<![\d.\-])(\d{1,6})(?![\d.\-])", message)
+            if nm:
+                scan = db.get(Scan, int(nm.group(1)))
+                if not scan:
+                    scan_summary = f"I have no record of scan #{int(nm.group(1))} in the database."
+    if scan is not None and scan_summary is None:
+        citations.append(f"scan#{scan.id}")
+        scan_summary = _scan_summary(db, scan)
+        blocks.append(f"[SCAN]{note} " + scan_summary.replace("\n", " "))
 
     # ---- package name ----
     if not citations:  # only if nothing more specific matched
