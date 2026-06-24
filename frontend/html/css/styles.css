@@ -312,7 +312,9 @@ input:focus, select:focus, textarea:focus, .login-card input:focus { box-shadow:
   background: color-mix(in srgb, var(--primary) 14%, transparent);
 }
 .stat-ic svg { width: 19px; height: 19px; }
-.stat-card .stat-num { font-size: 32px; }
+/* Reserve space on the right so a wide count (e.g. 274,800) never slides under the icon. */
+.stat-card .stat-num { font-size: 30px; padding-right: 46px; line-height: 1.15; }
+.stat-card .stat-label { padding-right: 46px; }
 .stat-card.stat-crit::after { background-image: linear-gradient(135deg,#f43f5e,#be123c); }
 .stat-card.stat-crit .stat-ic { color: var(--high); background: color-mix(in srgb, var(--high) 16%, transparent); }
 .stat-card.stat-kev::after { background-image: linear-gradient(135deg,#fb7185,#9f1239); }

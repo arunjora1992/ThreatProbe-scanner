@@ -617,6 +617,16 @@
         API.get(`/api/scans/${id}/web-findings`),
       ]);
 
+      // Show only the sections relevant to this scan type (avoid empty "Web findings",
+      // "Discovered hosts", etc. on scans that never produce them).
+      const t = scan.scan_type;
+      const isWeb = ["web", "zap_passive", "zap_active"].includes(t);
+      const isNet = ["discovery", "port", "full", "custom"].includes(t);
+      const isCred = t === "credentialed";
+      const isCis = t === "cis_benchmark";
+      const showCve = isCred || t === "full" || t === "custom" || findings.length > 0;
+      const showWeb = isWeb || webFindings.length > 0;
+
       const FIND_CAP = 300;
       const findRows = findings.slice(0, FIND_CAP).map((f) => `
         <tr>
@@ -647,8 +657,7 @@
 
       // Discovered hosts & open ports (network scans). The API returns hosts[].services[];
       // package-audit "services" (protocol "pkg") are excluded — they have their own table.
-      const showHosts = Array.isArray(scan.hosts) && scan.hosts.length > 0
-        && scan.scan_type !== "credentialed";
+      const showHosts = Array.isArray(scan.hosts) && scan.hosts.length > 0 && isNet;
       let openPortCount = 0;
       let hostRows = "";
       if (showHosts) {
@@ -700,17 +709,19 @@
           <colgroup><col style="width:26%"><col style="width:13%"><col style="width:10%"><col style="width:19%"><col style="width:32%"></colgroup>
           <thead><tr><th>Host</th><th>Port</th><th>State</th><th>Service</th><th>Product / version</th></tr></thead>
           <tbody>${hostRows || `<tr><td colspan="5" class="empty">No hosts up.</td></tr>`}</tbody></table></div>` : ""}
+        ${showCve ? `
         <h3 class="section-title">CVE findings (${findings.length})</h3>
         ${findings.length > FIND_CAP ? `<p class="muted small">Showing first ${FIND_CAP}. Use the Reports page or CSV export for the full set.</p>` : ""}
         <div class="table-wrap"><table class="fixed">
           <colgroup><col style="width:15%"><col style="width:13%"><col style="width:9%"><col style="width:6%"><col style="width:6%"><col style="width:36%"><col style="width:15%"></colgroup>
           <thead><tr><th>CVE</th><th>Package / service</th><th>Severity</th><th>CVSS</th><th title="EPSS: probability of exploitation in next 30 days">EPSS</th><th>Match / fix</th><th>Status</th></tr></thead>
-          <tbody>${findRows}</tbody></table></div>
+          <tbody>${findRows}</tbody></table></div>` : ""}
+        ${showWeb ? `
         <h3 class="section-title">Web / URL findings (${webFindings.length})</h3>
         <div class="table-wrap"><table class="fixed">
           <colgroup><col style="width:40%"><col style="width:14%"><col style="width:10%"><col style="width:36%"></colgroup>
           <thead><tr><th>Finding</th><th>Category</th><th>Severity</th><th>Remediation</th></tr></thead>
-          <tbody>${webRows}</tbody></table></div>
+          <tbody>${webRows}</tbody></table></div>` : ""}
         ${scan.scan_type === "cis_benchmark" ? `
         <h3 class="section-title" style="margin-top:22px">CIS benchmark / hardening results <span id="cfg-count" class="muted small"></span></h3>
         <div id="cfg-box">${loading()}</div>` : ""}
