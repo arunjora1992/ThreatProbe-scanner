@@ -68,12 +68,11 @@ def run_update(db) -> dict:
     db.commit()
     try:
         if cfg.source == "online":
+            # Keep the downloaded NVD feed on disk (in _auto/) instead of deleting it, so
+            # it persists under /data/cve_feeds for air-gap transfer / offline re-import
+            # without re-downloading. Re-running overwrites the same CVE-<year>.json.xz.
             path = _download_current_year()
             res = cve_import.import_single_file(db, path)
-            try:
-                os.remove(path)
-            except OSError:
-                pass
         else:
             res = cve_import.import_feed_directory(db, settings.cve_feed_dir)
         cfg.last_run = datetime.utcnow()
