@@ -1762,12 +1762,76 @@
         `<div class="settings-panel ${first ? "" : "hidden"}" data-panel="${id}">${html}</div>`;
       const panels = panel("general", brandingCard, true)
         + panel("email", smtpCard, false)
-        + app.groups.map((g) => panel(g.group, appGroupCard(g), false)).join("");
+        + app.groups.map((g) => panel(g.group,
+            appGroupCard(g) + (g.group === "assistant" ? modelManagerCard() : ""), false)).join("");
       const note = isAdmin ? "" : `<p class="muted small">Read-only — only admins can change settings.</p>`;
       view.innerHTML = pageHead("settings", "Settings") + tabBar + note
         + `<div id="settings-panels">${panels}</div>`;
+      if (app.groups.some((g) => g.group === "assistant")) ptLoadModels();
     } catch (ex) { view.innerHTML = errBox(ex); }
   }
+  function modelManagerCard() {
+    return `<div class="card" style="max-width:680px">
+      <h3 class="section-title" style="margin-top:0">AI model</h3>
+      <p class="muted small" style="margin-bottom:10px">Models live in <code>data/models/</code>.
+        The engine loads the <b>selected</b> model (or the largest) when it (re)starts.
+        Downloading needs internet — on an air-gapped host, copy a <code>.gguf</code> into that folder instead.</p>
+      <div id="model-mgr">${loading()}</div>
+      <div class="form-row" style="margin-top:12px"><label>Download a model (catalog)</label>
+        <select id="model-catalog"></select></div>
+      <div class="pill-row">
+        <button class="btn btn-primary" onclick="ptDownloadModel()">⬇ Download</button>
+        <button class="btn" onclick="ptDownloadModelUrl()">⬇ From URL…</button>
+        <button class="btn" onclick="ptLoadModels()">↻ Refresh</button>
+      </div></div>`;
+  }
+  window.ptLoadModels = async () => {
+    const box = document.getElementById("model-mgr");
+    if (!box) return;
+    try {
+      const d = await API.get("/api/assistant/models");
+      const rows = d.models.map((m) => `
+        <label class="chk" style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 0;border-bottom:1px solid var(--border)">
+          <span style="display:flex;align-items:center;gap:8px;min-width:0">
+            <input type="radio" name="active-model" style="width:auto" ${m.selected ? "checked" : ""} onchange="ptSelectModel('${esc(m.name)}')">
+            <span style="overflow-wrap:anywhere">${esc(m.name)}</span>
+            <span class="muted small nowrap">${m.size_mb} MB</span>
+            ${m.loaded ? '<span class="status-badge status-completed">loaded</span>' : ""}
+          </span>
+          <button class="btn btn-sm btn-danger" ${m.loaded ? "disabled title='loaded — restart to another first'" : ""} onclick="ptDeleteModel('${esc(m.name)}')">Del</button>
+        </label>`).join("") || `<p class="muted small">No models yet. Download one below or drop a .gguf in data/models/.</p>`;
+      const dl = d.downloading.length
+        ? `<div class="muted small" style="margin-top:8px"><span class="live-dot"></span>downloading: ${d.downloading.map(esc).join(", ")}…</div>` : "";
+      const restart = d.restart_required
+        ? `<div class="small" style="margin-top:8px;color:var(--med)">⚠ Selected model differs from the loaded one — restart the engine to apply: <code>docker compose up -d llm</code> (or <code>docker restart pentest_llm</code>).</div>` : "";
+      box.innerHTML = rows + dl + restart;
+      const sel = document.getElementById("model-catalog");
+      if (sel) sel.innerHTML = d.catalog.map((c) =>
+        `<option value="${esc(c.key)}" ${c.present ? "disabled" : ""}>${esc(c.label)} · RAM ${esc(c.ram)}${c.present ? " — present" : ""}</option>`).join("");
+      if (d.downloading.length) setTimeout(ptLoadModels, 5000);  // keep polling while a download runs
+    } catch (ex) { box.innerHTML = errBox(ex); }
+  };
+  window.ptSelectModel = async (name) => {
+    try { await API.post("/api/assistant/models/select", { name }); toast("Model selected — restart the engine to load it"); ptLoadModels(); }
+    catch (ex) { toast(ex.message, "err"); }
+  };
+  window.ptDownloadModel = async () => {
+    const key = document.getElementById("model-catalog").value;
+    if (!key) return;
+    try { const r = await API.post("/api/assistant/models/download", { key }); toast(r.started ? `Downloading ${r.filename}…` : (r.message || "Already downloading")); ptLoadModels(); }
+    catch (ex) { toast(ex.message, "err"); }
+  };
+  window.ptDownloadModelUrl = async () => {
+    const url = prompt("Direct https URL to a .gguf model file:");
+    if (!url) return;
+    try { const r = await API.post("/api/assistant/models/download", { url }); toast(r.started ? `Downloading ${r.filename}…` : (r.message || "started")); ptLoadModels(); }
+    catch (ex) { toast(ex.message, "err"); }
+  };
+  window.ptDeleteModel = async (name) => {
+    if (!confirm(`Delete model ${name}?`)) return;
+    try { await API.del(`/api/assistant/models/${encodeURIComponent(name)}`); toast("Deleted"); ptLoadModels(); }
+    catch (ex) { toast(ex.message, "err"); }
+  };
   window.ptSettingsTab = (id) => {
     document.querySelectorAll(".settings-panel").forEach((p) =>
       p.classList.toggle("hidden", p.dataset.panel !== id));

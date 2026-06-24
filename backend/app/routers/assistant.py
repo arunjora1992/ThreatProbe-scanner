@@ -2,12 +2,46 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
+from fastapi import HTTPException
+
 from ..auth import get_current_user, require_admin
 from ..database import get_db
 from ..models import User
-from ..services import app_settings, assistant
+from ..services import app_settings, assistant, llm_models
 
 router = APIRouter(prefix="/api/assistant", tags=["assistant"])
+
+
+@router.get("/models")
+def models(_: User = Depends(get_current_user)):
+    """GGUF model files present, which is selected/loaded, the catalog, downloads."""
+    return llm_models.list_models()
+
+
+@router.post("/models/select")
+def select_model(payload: dict, _: User = Depends(require_admin)):
+    try:
+        return llm_models.select_model(payload.get("name", ""))
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/models/download")
+def download_model(payload: dict, _: User = Depends(require_admin)):
+    try:
+        return llm_models.download_model(key=payload.get("key", ""),
+                                         url=payload.get("url", ""),
+                                         filename=payload.get("filename", ""))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.delete("/models/{name}")
+def delete_model(name: str, _: User = Depends(require_admin)):
+    try:
+        return llm_models.delete_model(name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.get("/status")

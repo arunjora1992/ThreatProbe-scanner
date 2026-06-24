@@ -108,18 +108,28 @@ services:
     restart: unless-stopped
 
   # Offline AI assistant — llama.cpp server exposing an OpenAI-compatible API, serving a
-  # small quantized GGUF baked into ./data/models (air-gap friendly: copy that folder
-  # across). The backend grounds every answer on the local CVE DB / findings (RAG) so the
-  # small model phrases facts rather than recalling them.
+  # quantized GGUF from ./data/models (air-gap friendly: copy that folder across). The
+  # backend grounds every answer on the local CVE DB / findings (RAG) so the model phrases
+  # facts rather than recalling them, and is model-agnostic.
+  #
+  # MODEL SWAP (no code/compose edits): the container auto-loads the LARGEST *.gguf present
+  # in ./data/models. To upgrade, drop a bigger model (e.g. Qwen2.5-3B/7B-Instruct Q4) into
+  # data/models/ and run `docker compose up -d llm`. Bump mem_limit for larger models
+  # (≈3g for 1.5B, ≈5g for 3B, ≈8g for 7B).
   llm:
     image: ghcr.io/ggml-org/llama.cpp:server
     container_name: pentest_llm
-    command: >
-      -m /models/qwen2.5-1.5b-instruct-q4_k_m.gguf
-      -c 4096 --threads 4 --host 0.0.0.0 --port 8091
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >
+        MODEL="";
+        if [ -f /models/.active ]; then SEL="$$(cat /models/.active)"; [ -f "/models/$$SEL" ] && MODEL="/models/$$SEL"; fi;
+        [ -z "$$MODEL" ] && MODEL="$$(ls -S /models/*.gguf 2>/dev/null | head -n1)";
+        echo "Loading model: $$MODEL";
+        exec /app/llama-server -m "$$MODEL" -c 4096 --threads 4 --host 0.0.0.0 --port 8091
     volumes:
       - ./data/models:/models:ro
-    mem_limit: 3g
+    mem_limit: 5g
     restart: unless-stopped
 
   frontend:

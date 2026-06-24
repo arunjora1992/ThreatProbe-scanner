@@ -653,9 +653,15 @@ from `./data/models`; the backend's `/api/assistant/chat` builds the grounded pr
 read-only retrieval tools. The scan launcher is a client-side wizard over the existing
 `/api/targets` + `/api/scans` endpoints. The model phrases; the DB supplies facts.
 
-**Model & resources.** Default model is **Qwen2.5-1.5B-Instruct (Q4_K_M, ~1 GB)**; the
-`llm` container is capped at 3 GB RAM. Swap models by dropping another GGUF in
-`data/models/` and updating the `llm` command + `LLM_MODEL` in `docker-compose.yml`.
+**Model & resources.** Default model is **Qwen2.5-1.5B-Instruct (Q4_K_M, ~1 GB)**. Swapping
+needs **no code or compose edits** — the `llm` container auto-loads the model named in
+`data/models/.active` (else the largest `.gguf` present). Manage models from the GUI under
+**Settings → AI Assistant → AI model**: list installed models, **download** from a curated
+catalog (Qwen2.5 1.5B/3B/7B, Llama 3.2 3B) or a custom URL into `data/models/`, **select**
+the active one, and delete. Selecting a different model takes effect when the engine
+restarts (`docker compose up -d llm`). Bump the `llm` `mem_limit` for bigger models
+(≈3 GB for 1.5B, ≈5 GB for 3B, ≈8 GB for 7B). On air-gapped hosts, drop the `.gguf` into
+`data/models/` manually.
 
 **Air-gapped install.** On a connected host the model file downloads into `data/models/`
 and the `ghcr.io/ggml-org/llama.cpp:server` image is pulled; copy `data/models/` across and

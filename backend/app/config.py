@@ -38,6 +38,8 @@ class Settings(BaseSettings):
     llm_api_url: str = "http://llm:8091"
     llm_model: str = "qwen2.5-1.5b-instruct"
     llm_timeout_seconds: int = 90
+    # Directory (host-mounted) holding the GGUF model files the llm container serves.
+    models_dir: str = "/data/models"
 
     # OWASP ZAP daemon (web-application scanning engine)
     zap_api_url: str = "http://zap:8090"
