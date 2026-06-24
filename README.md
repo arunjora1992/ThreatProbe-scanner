@@ -66,6 +66,7 @@ with vulnerability, severity, CVSS, and remediation details.
 - **Modern dashboard** — severity donut, scan-status chart, and a **Top priorities** panel (exploited / high-risk findings).
 - **Vibrant UI** — indigo/violet gradient theme with a consistent inline-SVG icon set per page (no external assets — air-gap safe), icon-led KPI cards, and brand-matched **PDF reports** (indigo header band, cyan accent, colour-coded severity).
 - **Live tool-level settings** — a tabbed Settings page exposes engine knobs with no `.env` edit or rebuild: nmap flags / SYN scan / scan timeout, ZAP crawl & active-scan limits, minimum severity shown, default CVE sort, scan auto-retention, session lifetime, password policy, and a **target scope allowlist** (CIDR/host globs that scans must match). Stored in the DB, read at runtime, with per-section *reset to defaults*.
+- **Offline AI assistant** — a built-in chat widget backed by a small local model (llama.cpp + a bundled quantized GGUF, **no internet**). It's **RAG-grounded**: every answer is built from this platform's own CVE DB / scan findings / package feeds, so it explains CVEs, summarises a scan, checks a package, and teaches vuln classes (XSS/SQLi/SSRF…) **without inventing facts**. Degrades gracefully to a deterministic DB summary if the model is offline (see below).
 - **White-label branding** — set a custom **application name, logo, and favicon** (emoji or an uploaded PNG/SVG) from **Settings → Branding**; applied to the login page, sidebar, and browser tab. An in-app **About** page describes the tool.
 - **Dark / light theme** toggle (persisted per browser).
 
@@ -593,6 +594,66 @@ filtered result as **PDF** or **CSV**. Backend endpoints:
 `GET /api/reports/export/preview` (all accept the filter query params
 `target_id, severity, status, types, host, port, cve_id, package, confidence,
 vulnerable_only`). The PDF caps detailed entries per section (use CSV for the full set).
+
+---
+
+## Offline AI assistant
+
+A built-in chat assistant (floating button, bottom-right) powered by a **small quantized
+model running locally** via [llama.cpp](https://github.com/ggml-org/llama.cpp) — it needs
+**no internet** and is bundled with the platform, so it works in fully air-gapped sites.
+
+**It is RAG-grounded, not a chatbot that recalls facts.** A small model would hallucinate
+CVE IDs, CVSS scores and "fixes", so the backend does the knowing and the model does the
+explaining: it detects entities in your question, retrieves authoritative facts from the
+**local database**, and instructs the model to answer **using only those facts**. If the
+model server is unreachable it falls back to a deterministic summary of the retrieved data,
+so the feature still works.
+
+What you can ask:
+
+- **Explain a CVE** — `explain CVE-2023-2975` → severity, CVSS, KEV/EPSS risk, affected
+  products and remediation, pulled from your local CVE DB (with the CVE cited).
+- **Summarise a scan** — `summarise scan #12` → severity breakdown, top KEV/critical
+  findings, web findings, failed CIS controls.
+- **Check a package** — backport-aware: which advisories affect it and the distro-fixed version.
+- **Explain a vuln class** — XSS, SQLi, SSRF, CSRF, IDOR, path traversal, weak TLS, missing
+  CSP/HSTS, CORS, clickjacking — what it is and how to fix it.
+
+Architecture: a `llm` service (llama.cpp server, OpenAI-compatible API) serves a GGUF model
+from `./data/models`; the backend's `/api/assistant/chat` builds the grounded prompt. The
+model phrases; the DB supplies facts.
+
+**Model & resources.** Default model is **Qwen2.5-1.5B-Instruct (Q4_K_M, ~1 GB)**; the
+`llm` container is capped at 3 GB RAM. Swap models by dropping another GGUF in
+`data/models/` and updating the `llm` command + `LLM_MODEL` in `docker-compose.yml`.
+
+**Air-gapped install.** On a connected host the model file downloads into `data/models/`
+and the `ghcr.io/ggml-org/llama.cpp:server` image is pulled; copy `data/models/` across and
+`docker save`/`load` the image to seed an offline site. (`data/models/` is git-ignored.)
+
+**Enable / disable.** Admins can disable it in one click from the chat header, or toggle it
+under **Settings → AI Assistant** (`POST /api/assistant/toggle`). When disabled the widget
+is hidden for everyone.
+
+---
+
+## Settings (live, tool-level configuration)
+
+The **Settings** page is tabbed — **General · Email · Scanning · Web/ZAP · Matching & data ·
+Security & scope · AI Assistant** — and changes apply at runtime with **no `.env` edit or
+rebuild** (stored in the DB, read by the engine via a short-TTL cache). Each section has a
+*Reset to defaults*. Highlights:
+
+- **Scanning** — default nmap flags, privileged SYN scan (`-sT`→`-sS`), scan timeout, default scan type.
+- **Web/ZAP** — spider & active-scan max minutes, spider depth/children, AJAX minutes/browsers/states.
+- **Matching & data** — minimum severity shown (GUI + reports), default CVE sort, **scan
+  auto-retention** (a daily cleanup deletes scans older than N days; 0 = keep forever), live-log cap.
+- **Security & scope** — session lifetime, password min length, and a **target scope
+  allowlist** (CIDR / host globs) enforced at scan creation — a guardrail so scans can only
+  hit in-scope assets.
+
+API: `GET/PUT /api/settings/app`, `POST /api/settings/app/reset/{group}`.
 
 ---
 

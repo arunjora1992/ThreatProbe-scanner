@@ -26,6 +26,9 @@
     alert: '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13.5"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
     flame: '<path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.07-2.14-.22-4.05 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.15.43-2.29 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>',
     server: '<rect x="2" y="3" width="20" height="8" rx="2"/><rect x="2" y="13" width="20" height="8" rx="2"/><line x1="6" y1="7" x2="6.01" y2="7"/><line x1="6" y1="17" x2="6.01" y2="17"/>',
+    assistant: '<path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8z"/>',
+    send: '<line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>',
+    close: '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
   };
   function icon(name, cls) {
     return `<svg class="ic ${cls || ""}" viewBox="0 0 24 24" fill="none" stroke="currentColor" `
@@ -119,6 +122,7 @@
       el.style.display = u.role === "admin" ? "" : "none";
     });
     loadToolSettings();
+    buildAssistant();
     navigateFromUrl();
   }
   // Cache of GUI-tunable tool settings (flat {key:value}); used for defaults elsewhere.
@@ -129,8 +133,126 @@
       const flat = {};
       (app.groups || []).forEach((g) => g.items.forEach((it) => { flat[it.key] = it.value; }));
       window._tool = flat;
+      if (_aiBuilt) applyAssistantEnabled();
     } catch (ex) { /* defaults apply until loaded */ }
   }
+
+  // ---------- Offline AI assistant (floating chat widget) ----------
+  let _aiHistory = [];
+  let _aiBuilt = false;
+  function buildAssistant() {
+    if (_aiBuilt) return;
+    const root = document.getElementById("ai-root");
+    if (!root) return;
+    root.innerHTML = `
+      <button id="ai-fab" class="ai-fab" title="AI security assistant" onclick="ptAiToggle()">${icon("assistant")}</button>
+      <div id="ai-panel" class="ai-panel hidden">
+        <div class="ai-head">
+          <span class="ai-title">${icon("assistant")} <b>Security Assistant</b> <span id="ai-status" class="ai-status">·</span></span>
+          <span class="pill-row">
+            <button class="btn btn-sm btn-ghost admin-only" onclick="ptAiDisable()" title="Disable the assistant (admins; re-enable in Settings → AI Assistant)">Disable</button>
+            <button class="modal-close" onclick="ptAiToggle()" style="font-size:20px">${icon("close")}</button>
+          </span>
+        </div>
+        <div id="ai-msgs" class="ai-msgs"></div>
+        <div class="ai-input">
+          <input id="ai-text" placeholder="Ask about a CVE, scan #, package, or XSS/SQLi…" onkeydown="if(event.key==='Enter')ptAiSend()">
+          <button class="btn btn-primary btn-sm" onclick="ptAiSend()">${icon("send")}</button>
+        </div>
+      </div>`;
+    _aiBuilt = true;
+    // Re-apply admin-only visibility to the freshly-built Disable button.
+    const isAdmin = (API.user() || {}).role === "admin";
+    root.querySelectorAll(".admin-only").forEach((el) => { el.style.display = isAdmin ? "" : "none"; });
+    if (!_aiHistory.length) {
+      aiPush("assistant", "Hi! I'm your offline security assistant. Ask me to **explain a CVE** "
+        + "(e.g. CVE-2023-2975), summarise a **scan** ('scan #12'), check a **package**, or "
+        + "explain a vuln class like **XSS** or **SQLi**. I answer from this platform's local data.");
+    }
+    applyAssistantEnabled();
+    refreshAiStatus();
+  }
+  // Show/hide the whole widget based on the assistant_enabled setting.
+  function applyAssistantEnabled() {
+    const root = document.getElementById("ai-root");
+    if (!root) return;
+    const enabled = (window._tool || {}).assistant_enabled !== false;
+    root.style.display = enabled ? "" : "none";
+    if (!enabled) document.getElementById("ai-panel")?.classList.add("hidden");
+  }
+  window.ptAiDisable = async () => {
+    if (!confirm("Disable the AI assistant? You can re-enable it in Settings → AI Assistant.")) return;
+    try {
+      await API.post("/api/assistant/toggle", { enabled: false });
+      window._tool = window._tool || {};
+      window._tool.assistant_enabled = false;
+      applyAssistantEnabled();
+      toast("AI assistant disabled");
+    } catch (ex) { toast(ex.message, "err"); }
+  };
+  async function refreshAiStatus() {
+    const el = document.getElementById("ai-status");
+    if (!el) return;
+    try {
+      const s = await API.get("/api/assistant/status");
+      el.textContent = s.model_online ? "● model online" : "● model offline (DB answers)";
+      el.style.color = s.model_online ? "var(--ok)" : "var(--med)";
+    } catch { el.textContent = ""; }
+  }
+  window.ptAiToggle = () => {
+    const p = document.getElementById("ai-panel");
+    if (!p) return;
+    p.classList.toggle("hidden");
+    if (!p.classList.contains("hidden")) {
+      refreshAiStatus();
+      const t = document.getElementById("ai-text");
+      if (t) t.focus();
+    }
+  };
+  function aiCitation(c) {
+    if (/^CVE-/i.test(c)) return `<a onclick="ptViewCve('${esc(c)}')">${esc(c)}</a>`;
+    const m = /^scan#(\d+)$/.exec(c);
+    if (m) return `<a onclick="ptAiToggle();ptOpenScan(${m[1]})">scan #${m[1]}</a>`;
+    return esc(c);
+  }
+  // Minimal, safe markdown: escape first, then **bold**, `code`, and newlines.
+  function aiFormat(text) {
+    let s = esc(text);
+    s = s.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>").replace(/`([^`]+)`/g, "<code>$1</code>");
+    return s.replace(/\n/g, "<br>");
+  }
+  function aiPush(role, text, citations) {
+    _aiHistory.push({ role, content: text });
+    const box = document.getElementById("ai-msgs");
+    if (!box) return;
+    const cites = (citations && citations.length)
+      ? `<div class="ai-cites">${citations.map(aiCitation).join(" · ")}</div>` : "";
+    box.insertAdjacentHTML("beforeend",
+      `<div class="ai-msg ai-${role}"><div class="ai-bubble">${aiFormat(text)}${cites}</div></div>`);
+    box.scrollTop = box.scrollHeight;
+  }
+  window.ptAiSend = async () => {
+    const input = document.getElementById("ai-text");
+    const msg = (input.value || "").trim();
+    if (!msg) return;
+    input.value = "";
+    aiPush("user", msg);
+    const box = document.getElementById("ai-msgs");
+    box.insertAdjacentHTML("beforeend",
+      `<div class="ai-msg ai-assistant" id="ai-typing"><div class="ai-bubble"><span class="live-dot"></span>thinking…</div></div>`);
+    box.scrollTop = box.scrollHeight;
+    try {
+      const r = await API.post("/api/assistant/chat", {
+        message: msg,
+        history: _aiHistory.slice(-6).map((h) => ({ role: h.role, content: h.content })),
+      });
+      document.getElementById("ai-typing")?.remove();
+      aiPush("assistant", r.reply || "(no answer)", r.citations);
+    } catch (ex) {
+      document.getElementById("ai-typing")?.remove();
+      aiPush("assistant", "Error: " + (ex.message || ex));
+    }
+  };
   function showLogin() {
     stopPolling();
     document.getElementById("app-view").classList.add("hidden");
@@ -221,8 +343,8 @@
       ];
       const cards = cardDefs.map(([l, n, cls, ic]) =>
         `<div class="card stat-card ${cls === "kev" ? "stat-kev" : cls === "crit" ? "stat-crit" : ""}">
-          <div class="stat-ic">${icon(ic)}</div>
-          <div class="stat-num">${n}</div><div class="stat-label">${l}</div></div>`).join("");
+          <div class="stat-top"><div class="stat-num">${n}</div><div class="stat-ic">${icon(ic)}</div></div>
+          <div class="stat-label">${l}</div></div>`).join("");
 
       // Scan-status breakdown bars.
       const ss = s.scan_status || {};
@@ -1520,6 +1642,27 @@
         ${feat("🛡️", "CIS benchmark / hardening", "Official CIS profiles via OpenSCAP (auto-installed) with L1/L2 Server/Workstation levels, plus a built-in agentless fallback.")}
         ${feat("🎯", "Risk prioritization", "CISA KEV (exploited-in-the-wild) flags + FIRST EPSS scores rank what to fix first — not just CVSS.")}
         ${feat("🗓️", "Scheduling &amp; reports", "Recurring scheduled scans, live scan logs, per-type PDF/CSV reports with charts, and emailed reports.")}
+        ${feat("🤖", "Offline AI assistant", "A bundled local model (no internet) answers questions grounded on your own CVE DB and scan results — explains CVEs, summarises scans, teaches vuln classes.")}
+        ${feat("⚙️", "Live tool-level settings", "Tune the engine from the GUI — scan flags, ZAP limits, severity floor, retention, session policy, target scope — no redeploy.")}
+      </div>
+
+      <h3 class="section-title">${icon("assistant")} Offline AI assistant</h3>
+      <div class="card">
+        <p>A built-in chat assistant powered by a <b>small quantized model running locally</b>
+        (llama.cpp + a bundled GGUF) — it needs <b>no internet</b> and ships with the platform,
+        so it works in fully air-gapped sites. Crucially, it's <b>RAG-grounded</b>: it never
+        recalls facts from the model (which would hallucinate); instead the backend retrieves
+        authoritative data from <b>this platform's own database</b> and the model explains only
+        that. If the model is ever offline, it falls back to a deterministic database summary.</p>
+        <div class="about-stats" style="margin-top:6px"><b>Use cases</b></div>
+        <ul class="about-list" style="margin-top:8px">
+          <li>💬 <b>Explain a CVE</b> — "explain CVE-2023-2975": severity, CVSS, KEV/EPSS risk, affected products, and the fix, from your local CVE DB.</li>
+          <li>📊 <b>Summarise a scan</b> — "summarise scan #12": severity breakdown, top KEV/critical findings, web findings, failed CIS controls.</li>
+          <li>📦 <b>Check a package</b> — backport-aware: which advisories affect a package and the distro-fixed version.</li>
+          <li>🕸️ <b>Teach a vuln class</b> — XSS, SQLi, SSRF, CSRF, IDOR, weak TLS, missing CSP/HSTS… what it is and how to fix it.</li>
+        </ul>
+        <p class="muted small">Open it with the floating chat button (bottom-right). Admins can
+        disable it in one click from the chat header, or toggle it under <b>Settings → AI Assistant</b>.</p>
       </div>
 
       <h3 class="section-title">Scan types</h3>
@@ -1541,6 +1684,7 @@
           <li>✅ Served over <b>HTTPS</b> (self-signed by default); credentials are used <b>in-memory only and never stored</b>.</li>
           <li>✅ Role-based access (admin / operator / viewer), white-label branding, and stop-anytime scans.</li>
           <li>✅ Threat-intel enrichment (KEV + EPSS) and distro-accurate matching (RHEL/CentOS/Oracle/Rocky, Ubuntu/Debian).</li>
+          <li>✅ <b>Offline AI assistant</b> grounded on local data, and a <b>tabbed Settings</b> page to tune the engine live (no redeploy).</li>
         </ul>
         <p class="muted small" style="margin-top:10px">⚠ For authorized security testing only. Scan only systems you own or have explicit written permission to assess.</p>
       </div>`;

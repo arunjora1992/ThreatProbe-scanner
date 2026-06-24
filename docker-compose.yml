@@ -27,6 +27,8 @@ services:
       # Authenticated ZAP scans run in the backend (creds stay in-memory), so the
       # backend talks to the ZAP daemon directly too.
       ZAP_API_URL: http://zap:8090
+      # Offline AI assistant — local llama.cpp server (OpenAI-compatible API).
+      LLM_API_URL: http://llm:8091
     volumes:
       # Persistent host bind mount for ALL feed data — survives container rebuilds/recreates:
       #   /data/cve_feeds/*.json[.gz]              NVD CVE feeds + CVE-DB exports/uploads
@@ -103,6 +105,21 @@ services:
       timeout: 5s
       retries: 10
       start_period: 90s
+    restart: unless-stopped
+
+  # Offline AI assistant — llama.cpp server exposing an OpenAI-compatible API, serving a
+  # small quantized GGUF baked into ./data/models (air-gap friendly: copy that folder
+  # across). The backend grounds every answer on the local CVE DB / findings (RAG) so the
+  # small model phrases facts rather than recalling them.
+  llm:
+    image: ghcr.io/ggml-org/llama.cpp:server
+    container_name: pentest_llm
+    command: >
+      -m /models/qwen2.5-1.5b-instruct-q4_k_m.gguf
+      -c 4096 --threads 4 --host 0.0.0.0 --port 8091
+    volumes:
+      - ./data/models:/models:ro
+    mem_limit: 3g
     restart: unless-stopped
 
   frontend:

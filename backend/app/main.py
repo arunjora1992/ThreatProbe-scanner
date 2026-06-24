@@ -8,7 +8,7 @@ from sqlalchemy.exc import OperationalError
 
 from .config import settings
 from .database import Base, engine
-from .routers import auth, branding, cves, dashboard, findings, reports, scans, schedules, settings as settings_router, targets
+from .routers import assistant, auth, branding, cves, dashboard, findings, reports, scans, schedules, settings as settings_router, targets
 from .seed import run_seed
 
 app = FastAPI(
@@ -98,3 +98,4 @@ app.include_router(dashboard.router)
 app.include_router(settings_router.router)
 app.include_router(branding.router)
 app.include_router(schedules.router)
+app.include_router(assistant.router)

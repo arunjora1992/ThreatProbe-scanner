@@ -17,3 +17,4 @@ LINKEDIN_POST.md
 
 # Downloaded vendor OVAL / advisory feeds (large, fetched at deploy time)
 data/cve_feeds/distro_feeds/
+data/models

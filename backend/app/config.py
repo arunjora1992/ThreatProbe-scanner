@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     # CORS (frontend origin). "*" is fine for an internal air-gapped deployment.
     cors_origins: str = "*"
 
+    # Offline AI assistant — local llama.cpp server (OpenAI-compatible API).
+    llm_api_url: str = "http://llm:8091"
+    llm_model: str = "qwen2.5-1.5b-instruct"
+    llm_timeout_seconds: int = 90
+
     # OWASP ZAP daemon (web-application scanning engine)
     zap_api_url: str = "http://zap:8090"
     zap_api_key: str = ""  # empty == API key disabled (internal/air-gapped use)

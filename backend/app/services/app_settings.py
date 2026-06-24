@@ -26,6 +26,7 @@ GROUPS = [
     ("zap", "Web / ZAP"),
     ("matching", "Matching & data"),
     ("security", "Security & scope"),
+    ("assistant", "AI Assistant"),
 ]
 
 # key -> definition. type in {str, text, int, bool, choice}.
@@ -108,6 +109,13 @@ DEFINITIONS: Dict[str, dict] = {
         "help": "One per line or comma-separated: CIDR (10.0.0.0/8) or host/URL glob "
                 "(*.lab.local). Empty = no restriction. Scans whose target falls outside "
                 "the list are blocked."},
+
+    # ---- AI assistant ----
+    "assistant_enabled": {
+        "group": "assistant", "type": "bool", "default": True,
+        "label": "Enable the offline AI assistant",
+        "help": "Show the chat widget. The assistant answers from local data only "
+                "(grounded on the CVE DB / scan findings) using the bundled offline model."},
 }
 
 _TTL = 5.0
