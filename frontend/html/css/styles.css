@@ -345,6 +345,19 @@ input:focus, select:focus, textarea:focus, .login-card input:focus { box-shadow:
 .cis-chip .v { font-size: 15px; font-weight: 700; }
 .cis-chip.score .v { background-image: var(--grad); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
 
+/* ---- Settings tabs ---- */
+.tabs { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 18px; border-bottom: 1px solid var(--border); }
+.tab {
+  background: transparent; border: none; border-bottom: 2px solid transparent; color: var(--muted);
+  padding: 9px 15px; cursor: pointer; font-size: 13px; font-weight: 600; border-radius: 8px 8px 0 0;
+  transition: color .15s, background .15s, border-color .15s;
+}
+.tab:hover { color: var(--text); background: color-mix(in srgb, var(--primary) 8%, transparent); }
+.tab.active { color: var(--primary); border-bottom-color: var(--primary); }
+:root[data-theme="light"] .tab.active { color: var(--primary-h); }
+.settings-panel { animation: fadeIn .18s ease; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+
 /* ---- About page ---- */
 .about-hero { display: flex; gap: 20px; align-items: center; box-shadow: var(--shadow); }
 .about-logo { font-size: 60px; line-height: 1; flex: none; }

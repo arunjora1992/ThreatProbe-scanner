@@ -118,7 +118,18 @@
     document.querySelectorAll(".admin-only").forEach((el) => {
       el.style.display = u.role === "admin" ? "" : "none";
     });
+    loadToolSettings();
     navigateFromUrl();
+  }
+  // Cache of GUI-tunable tool settings (flat {key:value}); used for defaults elsewhere.
+  window._tool = {};
+  async function loadToolSettings() {
+    try {
+      const app = await API.get("/api/settings/app");
+      const flat = {};
+      (app.groups || []).forEach((g) => g.items.forEach((it) => { flat[it.key] = it.value; }));
+      window._tool = flat;
+    } catch (ex) { /* defaults apply until loaded */ }
   }
   function showLogin() {
     stopPolling();
@@ -400,6 +411,13 @@
       </div>
       <button class="btn btn-primary btn-block" onclick="ptStartScan(${id})">Start scan</button>
       <p class="muted small" style="margin-top:10px">For web tests, set the target address to a URL (http/https). Only scan systems you are authorized to test.</p>`);
+    // Pre-select the configured default scan type (Settings → Scanning).
+    const def = (window._tool || {}).scan_default_profile;
+    const sel = document.getElementById("s-type");
+    if (sel && def && [...sel.options].some((o) => o.value === def)) {
+      sel.value = def;
+      ptToggleScanFields();
+    }
   };
   window.ptToggleScanFields = () => {
     const v = document.getElementById("s-type").value;
@@ -1034,6 +1052,7 @@
       if (sev) params.set("severity", sev);
       if (cwe) params.set("cwe", cwe);
       if (document.getElementById("cve-kev").checked) params.set("kev_only", "true");
+      params.set("sort", (window._tool || {}).match_default_sort || "risk");
       params.set("limit", "200");
       const cves = await API.get("/api/cves?" + params.toString());
       const rows = cves.map((c) => `
@@ -1229,12 +1248,47 @@
       .catch((ex) => toast(ex.message, "err"));
 
   // ---------- Settings (SMTP / email) ----------
+  // Render one app-settings field (input) from its registry definition.
+  function settingField(it) {
+    const id = `set-${it.key}`;
+    const help = it.help ? `<div class="muted small" style="margin-top:3px">${esc(it.help)}</div>` : "";
+    let input;
+    if (it.type === "bool") {
+      input = `<label class="chk"><input type="checkbox" id="${id}" ${it.value ? "checked" : ""}> ${esc(it.label)}</label>`;
+      return `<div class="form-row">${input}${help}</div>`;
+    } else if (it.type === "choice") {
+      input = `<select id="${id}">${(it.choices || []).map((o) =>
+        `<option ${String(it.value) === String(o) ? "selected" : ""}>${esc(o)}</option>`).join("")}</select>`;
+    } else if (it.type === "int") {
+      const mm = (it.min != null ? ` min="${it.min}"` : "") + (it.max != null ? ` max="${it.max}"` : "");
+      input = `<input type="number" id="${id}" value="${esc(it.value)}"${mm}>`;
+    } else if (it.type === "text") {
+      input = `<textarea id="${id}" rows="3">${esc(it.value)}</textarea>`;
+    } else {
+      input = `<input type="text" id="${id}" value="${esc(it.value)}">`;
+    }
+    return `<div class="form-row"><label>${esc(it.label)}</label>${input}${help}</div>`;
+  }
+
+  function appGroupCard(g) {
+    return `<div class="card" style="max-width:680px">
+      <h3 class="section-title" style="margin-top:0">${esc(g.name)}</h3>
+      ${g.items.map(settingField).join("")}
+      <div class="pill-row" style="margin-top:6px">
+        <button class="btn btn-primary" onclick="ptSaveAppGroup('${g.group}')">Save changes</button>
+        <button class="btn" onclick="ptResetAppGroup('${g.group}','${esc(g.name)}')">↺ Reset to defaults</button>
+      </div></div>`;
+  }
+
   async function renderSettings() {
     view.innerHTML = pageHead("settings", "Settings") + loading();
     try {
-      const [c, b] = await Promise.all([API.get("/api/settings/smtp"), API.get("/api/branding")]);
-      view.innerHTML = pageHead("settings", "Settings") + `
-        <div class="card" style="max-width:620px;margin-bottom:18px">
+      const [c, b, app] = await Promise.all([
+        API.get("/api/settings/smtp"), API.get("/api/branding"), API.get("/api/settings/app"),
+      ]);
+      window._appGroups = app.groups;
+      const isAdmin = (API.user() || {}).role === "admin";
+      const brandingCard = `<div class="card" style="max-width:680px">
           <h3 class="section-title" style="margin-top:0">Branding</h3>
           <p class="muted small" style="margin-bottom:12px">Customize the application name and logo shown on the login page and sidebar (white-labelling).</p>
           <div class="form-row"><label>Application name</label><input id="br-name" value="${esc(b.app_name)}" placeholder="ThreatProbe Scanner"></div>
@@ -1251,8 +1305,9 @@
             <button class="btn btn-primary" onclick="ptSaveBranding()">Save branding</button>
             <button class="btn" onclick="ptClearLogo()">Remove uploaded logo</button>
           </div>
-        </div>
-        <div class="card" style="max-width:620px">
+        </div>`;
+      const smtpCard = `<div class="card" style="max-width:680px">
+          <h3 class="section-title" style="margin-top:0">Email (SMTP)</h3>
           <p class="muted small" style="margin-bottom:12px">Configure SMTP here (stored in the database, not in files). Used to email scan reports with the findings summary in the body and PDF/CSV attached.</p>
           <div class="form-row"><label>SMTP host</label><input id="sm-host" value="${esc(c.host)}" placeholder="smtp.example.com"></div>
           <div class="grid" style="grid-template-columns:1fr 1fr">
@@ -1274,8 +1329,52 @@
             <button class="btn" onclick="ptTestSmtp()">Send test email</button>
           </div>
         </div>`;
+
+      const tabs = [{ id: "general", name: "General" }, { id: "email", name: "Email" }]
+        .concat(app.groups.map((g) => ({ id: g.group, name: g.name })));
+      const tabBar = `<div class="tabs">${tabs.map((t, i) =>
+        `<button class="tab ${i === 0 ? "active" : ""}" data-tab="${t.id}" onclick="ptSettingsTab('${t.id}')">${esc(t.name)}</button>`).join("")}</div>`;
+      const panel = (id, html, first) =>
+        `<div class="settings-panel ${first ? "" : "hidden"}" data-panel="${id}">${html}</div>`;
+      const panels = panel("general", brandingCard, true)
+        + panel("email", smtpCard, false)
+        + app.groups.map((g) => panel(g.group, appGroupCard(g), false)).join("");
+      const note = isAdmin ? "" : `<p class="muted small">Read-only — only admins can change settings.</p>`;
+      view.innerHTML = pageHead("settings", "Settings") + tabBar + note
+        + `<div id="settings-panels">${panels}</div>`;
     } catch (ex) { view.innerHTML = errBox(ex); }
   }
+  window.ptSettingsTab = (id) => {
+    document.querySelectorAll(".settings-panel").forEach((p) =>
+      p.classList.toggle("hidden", p.dataset.panel !== id));
+    document.querySelectorAll(".tab").forEach((b) =>
+      b.classList.toggle("active", b.dataset.tab === id));
+  };
+  window.ptSaveAppGroup = async (group) => {
+    const g = (window._appGroups || []).find((x) => x.group === group);
+    if (!g) return;
+    const values = {};
+    g.items.forEach((it) => {
+      const el = document.getElementById(`set-${it.key}`);
+      if (!el) return;
+      values[it.key] = it.type === "bool" ? el.checked : el.value;
+    });
+    try {
+      const r = await API.put("/api/settings/app", { values });
+      window._appGroups = r.groups;
+      loadToolSettings(true);
+      toast("Settings saved");
+    } catch (ex) { toast(ex.message, "err"); }
+  };
+  window.ptResetAppGroup = async (group, name) => {
+    if (!confirm(`Reset "${name}" settings to their defaults?`)) return;
+    try {
+      await API.post(`/api/settings/app/reset/${group}`);
+      loadToolSettings(true);
+      toast(`${name} reset to defaults`);
+      renderSettings();
+    } catch (ex) { toast(ex.message, "err"); }
+  };
   window.ptSaveSmtp = async () => {
     const enc = document.getElementById("sm-enc").value;
     const body = {

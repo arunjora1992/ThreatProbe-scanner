@@ -65,6 +65,7 @@ with vulnerability, severity, CVSS, and remediation details.
 - **CIS benchmark / hardening** — authenticated CIS audits via **OpenSCAP** (auto-installed on the target when missing) with selectable **Level 1/2 Server/Workstation** profiles, plus a built-in agentless fallback (see below).
 - **Modern dashboard** — severity donut, scan-status chart, and a **Top priorities** panel (exploited / high-risk findings).
 - **Vibrant UI** — indigo/violet gradient theme with a consistent inline-SVG icon set per page (no external assets — air-gap safe), icon-led KPI cards, and brand-matched **PDF reports** (indigo header band, cyan accent, colour-coded severity).
+- **Live tool-level settings** — a tabbed Settings page exposes engine knobs with no `.env` edit or rebuild: nmap flags / SYN scan / scan timeout, ZAP crawl & active-scan limits, minimum severity shown, default CVE sort, scan auto-retention, session lifetime, password policy, and a **target scope allowlist** (CIDR/host globs that scans must match). Stored in the DB, read at runtime, with per-section *reset to defaults*.
 - **White-label branding** — set a custom **application name, logo, and favicon** (emoji or an uploaded PNG/SVG) from **Settings → Branding**; applied to the login page, sidebar, and browser tab. An in-app **About** page describes the tool.
 - **Dark / light theme** toggle (persisted per browser).
 

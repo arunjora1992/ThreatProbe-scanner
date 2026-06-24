@@ -43,6 +43,11 @@ def create_user(payload: UserCreate, db: Session = Depends(get_db),
         raise HTTPException(status_code=409, detail="Username already exists")
     if payload.role not in ("admin", "operator", "viewer"):
         raise HTTPException(status_code=400, detail="Invalid role")
+    from ..services import app_settings
+    min_len = app_settings.get_int("security_password_min_length")
+    if len(payload.password or "") < min_len:
+        raise HTTPException(status_code=400,
+                            detail=f"Password must be at least {min_len} characters")
     user = User(
         username=payload.username,
         hashed_password=hash_password(payload.password),

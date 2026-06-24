@@ -53,9 +53,15 @@ def nmap_available() -> bool:
 
 
 def build_flags(scan_type: str, custom_flags: Optional[str]) -> str:
+    from . import app_settings
     if scan_type == "custom" and custom_flags:
         return custom_flags.strip()
-    return SCAN_PROFILES.get(scan_type, SCAN_PROFILES["full"])
+    if scan_type == "full":
+        flags = app_settings.get_str("scan_nmap_flags")
+        if app_settings.get_bool("scan_use_syn"):
+            flags = flags.replace("-sT", "-sS")
+        return flags
+    return SCAN_PROFILES.get(scan_type, app_settings.get_str("scan_nmap_flags"))
 
 
 def expand_targets(address: str) -> List[str]:
@@ -111,7 +117,9 @@ def run_scan(target_address: str, scan_type: str = "full",
     t.start()
     # Poll in short slices so we can honour a cancel request and the overall timeout.
     import time as _time
-    deadline = _time.time() + settings.scan_timeout_seconds
+    from . import app_settings
+    timeout_s = app_settings.get_int("scan_timeout_seconds")
+    deadline = _time.time() + timeout_s
     stdout = ""
     while True:
         try:
@@ -127,7 +135,7 @@ def run_scan(target_address: str, scan_type: str = "full",
                 raise ScanCancelled()
             if _time.time() > deadline:
                 proc.kill()
-                raise RuntimeError(f"Scan timed out after {settings.scan_timeout_seconds}s")
+                raise RuntimeError(f"Scan timed out after {timeout_s}s")
     t.join(timeout=2)
 
     if proc.returncode != 0 and not (stdout or "").strip():

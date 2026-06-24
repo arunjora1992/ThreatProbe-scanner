@@ -32,7 +32,8 @@ def authenticate_user(db: Session, username: str, password: str) -> Optional[Use
 
 
 def create_access_token(username: str, role: str) -> str:
-    expire = datetime.utcnow() + timedelta(minutes=settings.access_token_expire_minutes)
+    from .services import app_settings
+    expire = datetime.utcnow() + timedelta(minutes=app_settings.get_int("security_session_minutes"))
     payload = {"sub": username, "role": role, "exp": expire}
     return jwt.encode(payload, settings.secret_key, algorithm=settings.algorithm)
 

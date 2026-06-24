@@ -37,6 +37,16 @@ class User(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class AppSetting(Base):
+    """Generic key/value store for GUI-tunable, tool-level settings (overrides the env
+    defaults at runtime). One row per overridden setting; absent key == use the default
+    from services/app_settings.DEFINITIONS."""
+    __tablename__ = "app_settings"
+    key = Column(String(64), primary_key=True)
+    value = Column(Text, nullable=False, default="")
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+
 class SmtpConfig(Base):
     """SMTP settings for emailing reports — configured in the GUI (single row, id=1)."""
     __tablename__ = "smtp_config"

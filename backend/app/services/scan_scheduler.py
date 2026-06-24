@@ -57,11 +57,41 @@ def run_due(db) -> int:
     return n
 
 
+def purge_old_scans(db) -> int:
+    """Delete scans (and cascade children) older than the configured retention.
+    0 days = keep forever."""
+    from . import app_settings
+    days = app_settings.get_int("data_scan_retention_days")
+    if days <= 0:
+        return 0
+    cutoff = datetime.utcnow() - timedelta(days=days)
+    old = db.query(Scan).filter(Scan.created_at < cutoff).all()
+    n = 0
+    for scan in old:
+        db.delete(scan)   # relationships cascade to hosts/findings/etc.
+        n += 1
+    if n:
+        db.commit()
+        print(f"[scheduler] retention purge: deleted {n} scan(s) older than {days}d", flush=True)
+    return n
+
+
+_last_purge = [0.0]
+
+
 def _loop():
     while True:
         try:
             db = SessionLocal()
             run_due(db)
+            # Retention purge, at most once a day.
+            if time.monotonic() - _last_purge[0] > 86400:
+                try:
+                    purge_old_scans(db)
+                except Exception as exc:  # noqa: BLE001
+                    db.rollback()
+                    print(f"[scheduler] purge error: {exc}", flush=True)
+                _last_purge[0] = time.monotonic()
             db.close()
         except Exception as exc:  # noqa: BLE001
             print(f"[scheduler] loop error: {exc}", flush=True)

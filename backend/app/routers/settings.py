@@ -4,13 +4,40 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from ..auth import require_admin
+from ..auth import get_current_user, require_admin
 from ..database import get_db
 from ..models import SmtpConfig, User
 from ..schemas import SmtpConfigIn, SmtpConfigOut
-from ..services import mailer
+from ..services import app_settings, mailer
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
+
+
+@router.get("/app")
+def get_app_settings(db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+    """Tool-level settings registry + current values, grouped for the Settings GUI."""
+    return {"groups": app_settings.all_grouped()}
+
+
+@router.put("/app")
+def update_app_settings(payload: dict, db: Session = Depends(get_db),
+                        _: User = Depends(require_admin)):
+    """Persist a {key: value} map of setting overrides (validated + clamped)."""
+    values = payload.get("values", payload)
+    if not isinstance(values, dict):
+        raise HTTPException(status_code=400, detail="Expected a {key: value} object")
+    app_settings.set_many(db, values)
+    return {"groups": app_settings.all_grouped()}
+
+
+@router.post("/app/reset/{group}")
+def reset_app_settings(group: str, db: Session = Depends(get_db),
+                       _: User = Depends(require_admin)):
+    """Clear overrides for one group, reverting to built-in defaults."""
+    if group not in {g for g, _ in app_settings.GROUPS}:
+        raise HTTPException(status_code=400, detail="Unknown settings group")
+    n = app_settings.reset_group(db, group)
+    return {"reset": n, "groups": app_settings.all_grouped()}
 
 
 def _get_or_create(db: Session) -> SmtpConfig:

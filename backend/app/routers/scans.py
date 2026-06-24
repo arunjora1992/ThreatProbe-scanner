@@ -22,6 +22,47 @@ router = APIRouter(prefix="/api/scans", tags=["scans"])
 VALID_TYPES = {"discovery", "port", "full", "web", "custom", "credentialed",
                "cis_benchmark", "zap_passive", "zap_active"}
 
+_SEV_RANK = {"INFO": 0, "NONE": 0, "UNKNOWN": 0, "LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
+
+
+def _host_of(address: str) -> str:
+    """Bare host from an address/URL (drop scheme, path, port, CIDR suffix)."""
+    import re
+    a = (address or "").strip()
+    m = re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://([^/]+)", a)
+    if m:
+        a = m.group(1)
+    a = a.split("/")[0].split(":")[0]
+    return a
+
+
+def _scope_ok(address: str) -> bool:
+    """True if the target is within the configured scope allowlist (or none is set)."""
+    import fnmatch
+    import ipaddress
+    import re
+    from ..services import app_settings
+    raw = (app_settings.get_str("security_scope_allowlist") or "").strip()
+    patterns = [p.strip() for p in re.split(r"[\n,]", raw) if p.strip()]
+    if not patterns:
+        return True
+    host = _host_of(address)
+    for p in patterns:
+        try:
+            net = ipaddress.ip_network(p, strict=False)        # CIDR / IP pattern
+            try:
+                tgt = ipaddress.ip_network(host, strict=False)
+                if tgt.version == net.version and tgt.subnet_of(net):
+                    return True
+            except ValueError:
+                pass
+            continue
+        except ValueError:
+            pass
+        if fnmatch.fnmatch(host, p) or fnmatch.fnmatch((address or "").strip(), p):
+            return True
+    return False
+
 
 @router.get("", response_model=list[ScanOut])
 def list_scans(target_id: int | None = None, db: Session = Depends(get_db),
@@ -42,6 +83,12 @@ def create_scan(payload: ScanCreate, db: Session = Depends(get_db),
     target = db.get(Target, payload.target_id)
     if not target:
         raise HTTPException(status_code=404, detail="Target not found")
+    if not _scope_ok(target.address):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Target '{target.address}' is outside the configured scan scope "
+                   "allowlist (Settings → Security & scope).",
+        )
 
     # SSH-credentialed scans (package/CVE audit and CIS benchmark) run in the backend,
     # not the DB worker, so the supplied credentials are never written to the database.
@@ -152,6 +199,10 @@ def scan_findings(scan_id: int, severity: str | None = None, db: Session = Depen
         q = q.filter(Finding.severity == severity.upper())
     sev_order = {"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1}
     findings = q.all()
+    from ..services import app_settings
+    floor = _SEV_RANK.get(app_settings.get_str("match_min_severity"), 0)
+    if floor:
+        findings = [f for f in findings if _SEV_RANK.get(f.severity, 0) >= floor]
     # Enrich with the affected package/service name and the linked CVE's threat-intel
     # (KEV / EPSS) so the GUI can show + prioritise on them. Set as transient attributes
     # that FindingOut (from_attributes) picks up.
@@ -175,6 +226,10 @@ def scan_web_findings(scan_id: int, db: Session = Depends(get_db),
     if not db.get(Scan, scan_id):
         raise HTTPException(status_code=404, detail="Scan not found")
     rows = db.query(WebFinding).filter(WebFinding.scan_id == scan_id).all()
+    from ..services import app_settings
+    floor = _SEV_RANK.get(app_settings.get_str("match_min_severity"), 0)
+    if floor:
+        rows = [r for r in rows if _SEV_RANK.get(r.severity, 0) >= floor]
     sev_order = {"CRITICAL": 5, "HIGH": 4, "MEDIUM": 3, "LOW": 2, "INFO": 1}
     rows.sort(key=lambda r: (sev_order.get(r.severity, 0), r.cvss_score or 0), reverse=True)
     return [

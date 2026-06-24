@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional
 
 from ..config import settings
+from . import app_settings
 
 # ZAP risk -> our severity
 _RISK_SEV = {"High": "HIGH", "Medium": "MEDIUM", "Low": "LOW", "Informational": "INFO"}
@@ -155,10 +156,10 @@ def wait_for_zap(retries: int = 30, delay: float = 3.0) -> bool:
 def _set_scope_limits():
     """Bound the crawl and active scan so memory stays finite on real/large sites."""
     calls = [
-        ("/JSON/spider/action/setOptionMaxDepth/", {"Integer": settings.zap_spider_max_depth}),
-        ("/JSON/spider/action/setOptionMaxDuration/", {"Integer": settings.zap_spider_max_minutes}),
+        ("/JSON/spider/action/setOptionMaxDepth/", {"Integer": app_settings.get_int('zap_spider_max_depth')}),
+        ("/JSON/spider/action/setOptionMaxDuration/", {"Integer": app_settings.get_int('zap_spider_max_minutes')}),
         ("/JSON/spider/action/setOptionThreadCount/", {"Integer": 2}),
-        ("/JSON/ascan/action/setOptionMaxScanDurationInMins/", {"Integer": settings.zap_active_max_minutes}),
+        ("/JSON/ascan/action/setOptionMaxScanDurationInMins/", {"Integer": app_settings.get_int('zap_active_max_minutes')}),
         ("/JSON/ascan/action/setOptionThreadPerHost/", {"Integer": 2}),
         ("/JSON/ascan/action/setOptionHostPerScan/", {"Integer": 1}),
         ("/JSON/ascan/action/setOptionMaxResultsToList/", {"Integer": 200}),
@@ -275,7 +276,7 @@ def _spider(url: str, deadline: float, ctx: Optional[tuple] = None) -> int:
         try:
             scan_id = _valid_id(_api("/JSON/spider/action/scanAsUser/",
                 {"contextId": ctx[0], "userId": ctx[1], "url": url, "recurse": "true",
-                 "maxChildren": str(settings.zap_spider_max_children)}).get("scanAsUser"))
+                 "maxChildren": str(app_settings.get_int('zap_spider_max_children'))}).get("scanAsUser"))
         except Exception:
             scan_id = None
     if scan_id is None:
@@ -284,7 +285,7 @@ def _spider(url: str, deadline: float, ctx: Optional[tuple] = None) -> int:
         try:
             scan_id = _valid_id(_api("/JSON/spider/action/scan/",
                 {"url": url, "recurse": "true",
-                 "maxChildren": str(settings.zap_spider_max_children)}).get("scan"))
+                 "maxChildren": str(app_settings.get_int('zap_spider_max_children'))}).get("scan"))
         except Exception:
             return 0
     if scan_id is None:
@@ -310,12 +311,12 @@ def _ajax_spider(url: str, deadline: float, ctx: Optional[tuple] = None) -> int:
     """
     for path, key, val in (
         ("/JSON/ajaxSpider/action/setOptionBrowserId/", "String", settings.zap_ajax_browser),
-        ("/JSON/ajaxSpider/action/setOptionMaxDuration/", "Integer", settings.zap_ajax_max_minutes),
+        ("/JSON/ajaxSpider/action/setOptionMaxDuration/", "Integer", app_settings.get_int('zap_ajax_max_minutes')),
         ("/JSON/ajaxSpider/action/setOptionMaxCrawlDepth/", "Integer", settings.zap_ajax_max_crawl_depth),
         # Critical: ZAP defaults to one browser per CPU core (e.g. 16) — pinning this low
         # keeps memory bounded and stops the daemon crashing on browser teardown.
-        ("/JSON/ajaxSpider/action/setOptionNumberOfBrowsers/", "Integer", settings.zap_ajax_browsers),
-        ("/JSON/ajaxSpider/action/setOptionMaxCrawlStates/", "Integer", settings.zap_ajax_max_crawl_states),
+        ("/JSON/ajaxSpider/action/setOptionNumberOfBrowsers/", "Integer", app_settings.get_int('zap_ajax_browsers')),
+        ("/JSON/ajaxSpider/action/setOptionMaxCrawlStates/", "Integer", app_settings.get_int('zap_ajax_max_crawl_states')),
     ):
         try:
             _api(path, {key: val})
@@ -486,8 +487,8 @@ def run_zap_scan(target_url: str, active: bool = False, log_cb=None,
     except Exception:
         pass
     _set_scope_limits()
-    _log(f"Scope bounded: spider depth≤{settings.zap_spider_max_depth}, "
-         f"≤{settings.zap_spider_max_children} children/node, active ≤{settings.zap_active_max_minutes} min")
+    _log(f"Scope bounded: spider depth≤{app_settings.get_int('zap_spider_max_depth')}, "
+         f"≤{app_settings.get_int('zap_spider_max_children')} children/node, active ≤{app_settings.get_int('zap_active_max_minutes')} min")
     # Seed ZAP with the target so it's in scope / accessed at least once.
     try:
         _api("/JSON/core/action/accessUrl/", {"url": url, "followRedirects": "true"}, timeout=60)
@@ -501,17 +502,17 @@ def run_zap_scan(target_url: str, active: bool = False, log_cb=None,
         ctx = _setup_auth(url, auth, _log)
         result.authenticated = ctx is not None
 
-    _log(f"Spidering {url} (max {settings.zap_spider_max_minutes} min"
+    _log(f"Spidering {url} (max {app_settings.get_int('zap_spider_max_minutes')} min"
          f"{', authenticated' if ctx else ''})…")
-    spider_deadline = time.time() + settings.zap_spider_max_minutes * 60
+    spider_deadline = time.time() + app_settings.get_int('zap_spider_max_minutes') * 60
     result.urls_found = _spider(url, spider_deadline, ctx)
     _log(f"Spider done: {result.urls_found} URL(s) discovered. Draining passive scan…")
     _wait_passive(spider_deadline + 120)
 
     if ajax_spider:
         _log(f"AJAX spider (browser-driven, for JS/SPA apps) starting; "
-             f"max {settings.zap_ajax_max_minutes} min…")
-        ajax_deadline = time.time() + settings.zap_ajax_max_minutes * 60
+             f"max {app_settings.get_int('zap_ajax_max_minutes')} min…")
+        ajax_deadline = time.time() + app_settings.get_int('zap_ajax_max_minutes') * 60
         ajax_found = _ajax_spider(url, ajax_deadline, ctx)
         result.urls_found = max(result.urls_found, ajax_found)
         _log(f"AJAX spider done: {ajax_found} URL(s) in the crawl. Draining passive scan…")
@@ -533,9 +534,9 @@ def run_zap_scan(target_url: str, active: bool = False, log_cb=None,
                 seen[key] = f
 
     if active:
-        _log(f"Active scan started (intrusive; max {settings.zap_active_max_minutes} min"
+        _log(f"Active scan started (intrusive; max {app_settings.get_int('zap_active_max_minutes')} min"
              f"{', authenticated' if ctx else ''})…")
-        active_deadline = time.time() + settings.zap_active_max_minutes * 60
+        active_deadline = time.time() + app_settings.get_int('zap_active_max_minutes') * 60
         # Re-harvest each poll: alert counts are deduped by key, so repeated passes are safe.
         _active(url, active_deadline, ctx,
                 on_poll=lambda: (seen.clear(), _harvest()))
