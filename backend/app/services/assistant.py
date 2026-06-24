@@ -515,6 +515,12 @@ def _answer_diff(db: Session, message: str):
                             "grounded": True, "model": False}
     if not a or not b:
         return None
+    if a.target_id != b.target_id:
+        return {"reply": f"Scan #{a.id} is on **{a.target.address if a.target else '?'}** and "
+                         f"#{b.id} is on **{b.target.address if b.target else '?'}** — comparing "
+                         f"scans of different targets isn't meaningful. Pick two scans of the "
+                         f"same target.", "citations": [f"scan#{a.id}", f"scan#{b.id}"],
+                "grounded": True, "model": False}
     if _scan_domain(a) != _scan_domain(b):
         return {"reply": f"Scan #{a.id} is a **{a.scan_type}** scan and #{b.id} is a "
                          f"**{b.scan_type}** scan — different scan types can't be meaningfully "
