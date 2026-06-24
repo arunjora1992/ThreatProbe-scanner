@@ -17,7 +17,7 @@ import re
 import urllib.error
 import urllib.request
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from ..config import settings
@@ -35,6 +35,21 @@ DIFF_RE = re.compile(
     r"scan|\bvs\b|versus)\b", re.I)
 SCAN_RE = re.compile(r"scan\s*#?\s*(\d+)", re.I)
 PKG_RE = re.compile(r"(?:package|is|about)\s+([a-zA-Z0-9][\w.+-]{1,40})", re.I)
+_PKG_STOP = {"the", "this", "it", "there", "vulnerable", "any", "a", "an", "my", "all",
+             "package", "which", "what", "some", "that", "found", "for", "of", "in", "on"}
+
+
+def _extract_package(message: str):
+    """Pull a package name from varied phrasings: 'CVE(s) for kernel', 'kernel CVEs',
+    'package kernel', 'is openssl vulnerable', 'about glibc'."""
+    s = message.strip()
+    for rx in (r"\bcves?\s+(?:for|of|in|on|about|affecting)\s+([a-zA-Z0-9][\w.+-]{1,40})",
+               r"\b(?:package|pkg|is|about|patch|update)\s+([a-zA-Z0-9][\w.+-]{1,40})",
+               r"\b([a-zA-Z0-9][\w.+-]{1,40})\s+(?:package\s+)?(?:cves?|vulnerab\w*|advisor\w*)"):
+        m = re.search(rx, s, re.I)
+        if m and m.group(1).lower() not in _PKG_STOP:
+            return m.group(1)
+    return None
 HOST_RE = re.compile(r"https?://([^/\s]+)|\b(\d{1,3}(?:\.\d{1,3}){3})\b|\b((?:[a-z0-9-]+\.)+[a-z]{2,})\b", re.I)
 # Stems (no trailing \b) so "summarise", "vulnerability", "findings", "scanning" all match.
 SCAN_INTENT_RE = re.compile(
@@ -198,20 +213,15 @@ def retrieve(db: Session, message: str) -> dict:
         scan_summary = _scan_summary(db, scan)
         blocks.append(f"[SCAN]{note} " + scan_summary.replace("\n", " "))
 
-    # ---- package name ----
+    # ---- package CVE lookup (deterministic) ----
+    pkg_summary = None
     if not citations:  # only if nothing more specific matched
-        pm = PKG_RE.search(message)
-        if pm:
-            name = pm.group(1).lower()
-            if name not in ("the", "this", "it", "there", "vulnerable", "any"):
-                advs = (db.query(DistroAdvisory)
-                        .filter(func.lower(DistroAdvisory.package) == name)
-                        .limit(8).all())
-                if advs:
-                    citations.append(name)
-                    blocks.append(f"[PACKAGE] '{name}' — {len(advs)} distro advisory match(es) (sample):")
-                    for a in advs:
-                        blocks.append(f"  - {a.distro} {a.release}: {a.cve_id} fixed in {a.fixed_version or 'n/a'}")
+        name = _extract_package(message)
+        if name:
+            pkg_summary = _package_summary(db, name)
+            if pkg_summary:
+                citations.append(name)
+                blocks.append("[PACKAGE] " + pkg_summary.replace("\n", " "))
 
     # ---- vuln-class education ----
     low = message.lower()
@@ -222,9 +232,50 @@ def retrieve(db: Session, message: str) -> dict:
             blocks.append(f"[CLASS] {title}: {what} Fix: {fix}")
 
     return {"blocks": blocks, "citations": list(dict.fromkeys(citations)),
-            "scan_summary": scan_summary,
+            "scan_summary": scan_summary, "pkg_summary": pkg_summary,
             "scan_id": resolved_scan.id if resolved_scan else None,
             "scan_context": _scan_context(db, resolved_scan) if resolved_scan else None}
+
+
+def _package_summary(db: Session, name: str) -> str:
+    """Deterministic CVE summary for a package: known CVEs in the local CVE DB (by affected
+    product, with a kernel→linux_kernel alias) + distro advisories (backport-aware fixes)."""
+    nl = name.lower()
+    products = {nl}
+    if nl == "kernel" or nl.startswith("kernel"):
+        products.add("linux_kernel")
+    conds = [func.lower(CVE.cpe_products).like(f"%{p}%") for p in products]
+    base = db.query(CVE).filter(or_(*conds))
+    total = base.count()
+    kev_n = base.filter(CVE.kev.is_(True)).count()
+    top = (base.order_by(CVE.kev.desc(), CVE.epss_score.desc().nullslast(),
+                         CVE.cvss_v3_score.desc().nullslast()).limit(12).all())
+
+    advs = (db.query(DistroAdvisory).filter(func.lower(DistroAdvisory.package) == nl).all())
+    fixed = {}
+    for a in advs:
+        if a.fixed_version:
+            fixed.setdefault((a.distro, a.cve_id), a.fixed_version)
+
+    if not total and not advs:
+        return (f"I found no CVEs for **{name}** in the local CVE database, and no distro "
+                f"advisories for that package. (Import NVD feeds / distro feeds if you expect data.)")
+
+    lines = [f"**{name} — CVE summary (local data)**"]
+    if total:
+        extra = f" ({kev_n} actively exploited / KEV)" if kev_n else ""
+        lines.append(f"**{total}** CVE(s) in the local DB list **{name}** as affected{extra}. Highest-risk:")
+        for c in top:
+            tag = " [KEV]" if c.kev else ""
+            cvss = c.cvss_v3_score if c.cvss_v3_score is not None else c.cvss_v2_score
+            lines.append(f"• {c.cve_id} ({c.severity}, CVSS {cvss if cvss is not None else '?'}){tag}")
+        if total > len(top):
+            lines.append(f"…and {total - len(top)} more — see the CVE Database page (filter by product '{name}').")
+    if advs:
+        lines.append(f"\nDistro advisories for **{name}**: {len(advs)} (backport-aware fixes). Examples:")
+        for (distro, cve_id), fv in list(fixed.items())[:8]:
+            lines.append(f"• {distro}: {cve_id} fixed in {fv}")
+    return "\n".join(lines)
 
 
 def _scan_inprogress(scan) -> str:
@@ -557,6 +608,10 @@ def answer(db: Session, message: str, history: list | None = None) -> dict:
         if diff:
             return diff
     ctx = retrieve(db, message)
+    # Package CVE lookups are deterministic (accurate counts + KEV + distro fixes).
+    if ctx.get("pkg_summary"):
+        return {"reply": ctx["pkg_summary"], "citations": ctx["citations"],
+                "grounded": True, "model": False}
     # Scan queries: a plain "summarise scan N" returns the DETERMINISTIC summary (a small
     # model misreads aggregate counts — e.g. inverting "6 failed" into "no failures"). But
     # a SPECIFIC question ("what are the criticals?", "remediation for X?") is answered by
