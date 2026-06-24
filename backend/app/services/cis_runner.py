@@ -19,6 +19,16 @@ from .ssh_scanner import collect_compliance
 _SEV = {"CRITICAL": 5, "HIGH": 4, "MEDIUM": 3, "LOW": 2, "INFO": 1, "NONE": 0}
 
 
+def _level_label(profile: str) -> str:
+    """Friendly CIS level from an SSG profile id (xccdf_..._profile_cis_server_l1)."""
+    p = (profile or "").lower()
+    lvl = "Level 2" if "l2" in p or "level2" in p else ("Level 1" if "l1" in p or "level1" in p
+                                                        else "")
+    plat = "Workstation" if "workstation" in p else ("Server" if "server" in p else "")
+    label = " ".join(x for x in ("CIS", lvl, plat) if x).strip()
+    return label or (profile.split("_profile_")[-1] if "_profile_" in profile else profile) or "CIS"
+
+
 def _assess_host(db, scan, host_addr, port, username, password, key_text, key_passphrase,
                  prefer_profile=""):
     scanlog.log(db, scan, f"[{host_addr}] SSH connecting on port {port} for CIS audit…")
@@ -49,12 +59,16 @@ def _assess_host(db, scan, host_addr, port, username, password, key_text, key_pa
             severity=r.severity, status=r.status, detail=r.detail,
             remediation=r.remediation, evidence=r.evidence,
         ))
-    # A summary row carries the mode + compliance score for the GUI/report.
-    summary = f"{cr.mode.upper()} audit: {fails} failed of {len(cr.results)} checks"
+    # A summary row carries the OS, engine, level + compliance score for the GUI/report.
+    osname = (f"{cr.os_name} {cr.os_version}".strip()) or "unknown OS"
+    summary = f"{osname} · "
     if cr.mode == "openscap":
-        summary += f" · profile {cr.profile}"
+        summary += f"OpenSCAP · {_level_label(cr.profile)}"
         if cr.score is not None:
             summary += f" · score {cr.score:.1f}%"
+    else:
+        summary += "built-in hardening checks"
+    summary += f" · {fails} failed of {len(cr.results)} checks"
     db.add(ConfigFinding(
         scan_id=scan.id, host=host_addr, check_id="audit-summary",
         title="CIS audit summary", severity="INFO", status="info",

@@ -98,21 +98,43 @@ def parse_oval(xml_text: str) -> List[dict]:
     objects: Dict[str, str] = {}     # object_id -> package name
     states: Dict[str, str] = {}      # state_id  -> fixed evr (only "less than" ops)
     tests: Dict[str, Tuple[str, str]] = {}  # test_id -> (object_ref, state_ref)
+    variables: Dict[str, str] = {}   # var_id -> literal value (Ubuntu names/evr via var_ref)
 
+    def _val_or_var(child) -> str:
+        """A child's literal text, or its var_ref's resolved value (filled in pass 2)."""
+        txt = (child.text or "").strip()
+        if txt:
+            return txt
+        ref = child.get("var_ref")
+        return variables.get(ref, "") if ref else ""
+
+    # Pass 1: collect constant_variable values (Ubuntu stores package names / evr here).
+    for el in root.iter():
+        ln = _localname(el.tag)
+        if ln == "constant_variable":
+            vid = el.get("id", "")
+            for child in el:
+                if _localname(child.tag) == "value" and (child.text or "").strip():
+                    variables[vid] = child.text.strip()
+                    break
+
+    # Pass 2: objects, states, tests (resolving var_ref against the variable map).
     for el in root.iter():
         ln = _localname(el.tag)
         if ln.endswith("_object"):
             oid = el.get("id", "")
             for child in el:
-                if _localname(child.tag) == "name" and (child.text or "").strip():
-                    objects[oid] = child.text.strip()
+                if _localname(child.tag) == "name":
+                    name = _val_or_var(child)
+                    if name:
+                        objects[oid] = name
                     break
         elif ln.endswith("_state"):
             sid = el.get("id", "")
             for child in el:
                 cln = _localname(child.tag)
                 if cln in ("evr", "version") and "less than" in (child.get("operation") or ""):
-                    states[sid] = (child.text or "").strip()
+                    states[sid] = _val_or_var(child)
                     break
         elif ln.endswith("_test"):
             tid = el.get("id", "")
@@ -126,41 +148,65 @@ def parse_oval(xml_text: str) -> List[dict]:
             if tid and obj_ref:
                 tests[tid] = (obj_ref, state_ref)
 
-    rows = []
+    # Index every definition: its own test_refs, the definitions it extends, and
+    # (for CVE definitions) its metadata. Ubuntu puts the dpkginfo tests in per-package
+    # definitions referenced from the CVE definition via <extend_definition>; RHEL/Oracle
+    # inline the tests. Resolving extends transitively handles both.
+    defs = {}            # def_id -> {"tests": set, "extends": set}
+    cve_defs = []        # definitions that carry CVE references
     for defin in root.iter():
         if _localname(defin.tag) != "definition":
             continue
+        did = defin.get("id", "")
+        own_tests, extends = set(), set()
         cves, severity, advisory_id, platform = [], "", "", ""
         for el in defin.iter():
             ln = _localname(el.tag)
-            if ln == "reference" and (el.get("source") or "").upper() == "CVE":
-                rid = el.get("ref_id", "")
-                if rid:
-                    cves.append(rid)
+            if ln == "criterion":
+                tref = el.get("test_ref", "")
+                if tref:
+                    own_tests.add(tref)
+            elif ln == "extend_definition":
+                dref = el.get("definition_ref", "")
+                if dref:
+                    extends.add(dref)
+            elif ln == "reference" and (el.get("source") or "").upper() == "CVE":
+                if el.get("ref_id"):
+                    cves.append(el.get("ref_id"))
             elif ln == "severity" and not severity:
                 severity = (el.text or "").strip()
             elif ln == "platform" and not platform:
                 platform = (el.text or "").strip()
             elif ln == "title" and not advisory_id:
-                t = (el.text or "")
-                m = re.search(r"\b([RES]HSA|ELSA|USN|DSA|DLA)[-: ]?\d[\w:-]*", t)
+                m = re.search(r"\b([RES]HSA|ELSA|USN|DSA|DLA)[-: ]?\d[\w:-]*", el.text or "")
                 if m:
                     advisory_id = m.group(0)
-        if not cves:
-            continue
+        defs[did] = {"tests": own_tests, "extends": extends}
+        if cves:
+            cve_defs.append((did, cves, severity, advisory_id, platform))
+
+    def _all_tests(def_id, seen):
+        """Test refs of a definition plus every definition it extends (transitive)."""
+        if def_id in seen or def_id not in defs:
+            return set()
+        seen.add(def_id)
+        out = set(defs[def_id]["tests"])
+        for ext in defs[def_id]["extends"]:
+            out |= _all_tests(ext, seen)
+        return out
+
+    rows = []
+    for did, cves, severity, advisory_id, platform in cve_defs:
         distro, release, manager = _platform_to_distro(platform)
         if not distro:
             continue
-        # Collect (package, fixed_evr) from every test referenced in the criteria tree.
         pkgfix = {}
-        for el in defin.iter():
-            if _localname(el.tag) == "criterion":
-                tref = el.get("test_ref", "")
-                if tref in tests:
-                    obj_ref, state_ref = tests[tref]
-                    pkg = objects.get(obj_ref)
-                    if pkg:
-                        pkgfix[pkg] = states.get(state_ref, "")  # "" = no fix evr
+        for tref in _all_tests(did, set()):
+            if tref in tests:
+                obj_ref, state_ref = tests[tref]
+                pkg = objects.get(obj_ref)
+                if pkg:
+                    pkgfix[pkg] = states.get(state_ref, "")  # "" = no fix evr
         for pkg, fixed in pkgfix.items():
             for cve in cves:
                 rows.append({
