@@ -49,8 +49,9 @@ with vulnerability, severity, CVSS, and remediation details.
 18. [Air-gapped deployment](#air-gapped-deployment)
 19. [Backup & restore](#backup--restore)
 20. [Troubleshooting](#troubleshooting)
-21. [Bug history & fixes](#bug-history--fixes)
-22. [Authorization & scope](#authorization--scope)
+21. [Feature changelog](#feature-changelog)
+22. [Bug history & fixes](#bug-history--fixes)
+23. [Authorization & scope](#authorization--scope)
 
 ---
 
@@ -920,6 +921,31 @@ docker compose down -v
 - **`401 Unauthorized` in the GUI** — token expired; log in again.
 - **Backend can't connect to DB at startup** — it retries for ~60s waiting for the
   `db` healthcheck; check `docker compose logs db`.
+
+---
+
+## Feature changelog
+
+Major features added over the project's life (newest first). Each is documented in detail
+in the section above; commit hashes are on the `main` branch.
+
+| Date | Feature | Commit |
+|------|---------|--------|
+| 2026-06-25 | **AI: patch plan, scan diff, and chat actions** — "what should I fix first", "what changed since the last scan", and "rescan/stop/schedule" straight from chat. | `69aec2a` |
+| 2026-06-24 | **GUI AI-model manager + zero-edit model swap** — list/download/select/delete GGUFs; the engine auto-loads the selected (or largest) model. | `5910a9d` |
+| 2026-06-24 | **In-chat scan-launcher wizard** (target → type → credentials → confirm → auto-summary) + per-scan **result counts**. | `816ded9` |
+| 2026-06-24 | **Offline RAG-grounded AI assistant** (llama.cpp + bundled GGUF) with enable/disable. | `5dc61b9` |
+| 2026-06-24 | **Live tool-level settings** — tabbed, DB-backed, read at runtime (scanning/ZAP/matching/security/AI). | `c288850` |
+| 2026-06-24 | **Dashboard graphs** (severity/status/type donuts + 14-day activity), **scan-completion notifications**, global page footer. | `e969dcb` |
+| 2026-06-24 | **Vibrant UI refresh** — inline-SVG icon system, KPI cards, brand-matched PDFs, gradient logo/favicon. | `452a85b`, `3286e5c` |
+| 2026-06-24 | **Distro feeds online fetch + air-gap persistence**; **Ubuntu OVAL** support. | `8164b81`, `e3b2384` |
+| 2026-06-23 | **CIS benchmark scan type** — OpenSCAP L1/L2 Server/Workstation + agentless built-in fallback. | `fd85bfa`, `3fb9f53` |
+| 2026-06-23 | **KEV + EPSS** threat-intel enrichment & risk-based prioritization. | `148873c` |
+| 2026-06-23 | **Scheduled (recurring) scans**; **stop/cancel**; **rescan**; **white-label branding**. | `c8dcb48`, `d567c15`, `9f400d2` |
+| 2026-06-23 | **Per-scan-type PDF/CSV reports** with charts; **distro-accurate (backport-aware)** matching via vendor OVAL. | `91b10a9`, `d527868` |
+| 2026-06-23 | **HTTPS GUI** (self-signed); in-app **About** page. | `4955ccc`, `e35da8f` |
+| 2026-06-18 | **Authenticated + AJAX/SPA ZAP** scanning; **CVE DB export/upload** for air-gap seeding. | `71e0364`, `bc852e0` |
+| 2026-06-11 | **Initial platform** — multi-host targets, GUI SMTP + emailed reports, live scan log, scheduled CVE updates. | `0a9f568`, `0f9a2c6` |
 
 ---
 
