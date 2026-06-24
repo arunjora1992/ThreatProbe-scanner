@@ -69,10 +69,15 @@ const API = (() => {
     download: async (path, filename) => {
       const res = await fetch(path, { headers: { Authorization: "Bearer " + token() } });
       if (!res.ok) throw new Error("Download failed");
+      // Prefer the server-provided filename (target name + scan type); fall back to caller's.
+      let name = filename;
+      const cd = res.headers.get("Content-Disposition") || "";
+      const m = /filename\*?=(?:UTF-8'')?["']?([^"';]+)/i.exec(cd);
+      if (m) { try { name = decodeURIComponent(m[1]); } catch (e) { name = m[1]; } }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
-      a.href = url; a.download = filename; document.body.appendChild(a); a.click();
+      a.href = url; a.download = name; document.body.appendChild(a); a.click();
       a.remove(); URL.revokeObjectURL(url);
     },
   };

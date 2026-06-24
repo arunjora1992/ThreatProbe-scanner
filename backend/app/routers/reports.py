@@ -30,6 +30,26 @@ def _get_scan(db: Session, scan_id: int) -> Scan:
     return scan
 
 
+def _slug(text: str) -> str:
+    """Filesystem-safe token from a target name/address."""
+    import re
+    s = re.sub(r"[^A-Za-z0-9._-]+", "-", (text or "").strip()).strip("-")
+    return s[:40] or "target"
+
+
+def _report_basename(scan: Scan, suffix: str = "report") -> str:
+    """e.g. webserver-prod_cis_benchmark_scan42_report — target name + scan type + id."""
+    t = scan.target
+    tgt = (t.name or t.address) if t else ""
+    ts = scan.finished_at or scan.created_at
+    stamp = ts.strftime("%Y%m%d-%H%M") if ts else ""
+    parts = [_slug(tgt), scan.scan_type, f"scan{scan.id}"]
+    if stamp:
+        parts.append(stamp)
+    parts.append(suffix)
+    return "_".join(parts)
+
+
 def _csv(values: Optional[str]):
     """Split a comma-separated query param into a list (or None)."""
     if not values:
@@ -52,7 +72,7 @@ def report_csv(scan_id: int, db: Session = Depends(get_db),
                _: User = Depends(get_current_user)):
     scan = _get_scan(db, scan_id)
     data = build_findings_csv(db, scan)
-    fname = f"scan_{scan.id}_report.csv"
+    fname = f"{_report_basename(scan)}.csv"
     return Response(
         content=data,
         media_type="text/csv",
@@ -65,7 +85,7 @@ def report_packages_csv(scan_id: int, db: Session = Depends(get_db),
                         _: User = Depends(get_current_user)):
     scan = _get_scan(db, scan_id)
     data = build_packages_csv(db, scan)
-    fname = f"scan_{scan.id}_package_inventory.csv"
+    fname = f"{_report_basename(scan, 'package_inventory')}.csv"
     return Response(
         content=data, media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{fname}"'},
@@ -77,7 +97,7 @@ def report_pdf(scan_id: int, db: Session = Depends(get_db),
                _: User = Depends(get_current_user)):
     scan = _get_scan(db, scan_id)
     data = build_findings_pdf(db, scan)
-    fname = f"scan_{scan.id}_report.pdf"
+    fname = f"{_report_basename(scan)}.pdf"
     return Response(
         content=data,
         media_type="application/pdf",

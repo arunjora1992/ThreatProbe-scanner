@@ -31,6 +31,15 @@ HOST_RE = re.compile(r"https?://([^/\s]+)|\b(\d{1,3}(?:\.\d{1,3}){3})\b|\b((?:[a
 # Stems (no trailing \b) so "summarise", "vulnerability", "findings", "scanning" all match.
 SCAN_INTENT_RE = re.compile(
     r"\b(scan|result|audit|finding|vulnerab|compliance|report|assessment|summar|show)\w*", re.I)
+# A pointed sub-question about a scan (vs. a plain "summarise it") -> let the model answer
+# the specific question from the scan facts, instead of dumping the whole summary.
+SPECIFIC_RE = re.compile(
+    r"\b(critical|high|medium|\blow\b|sever|remediat|\bfix|which|where|"
+    r"host|port|service|packag|kev|exploit|epss|cvss|web|url|failed|\bfail|\bpass|control|"
+    r"\btop\b|worst|detail|recommend|priorit|open port|patch|cwe)\w*", re.I)
+# Count/how-many questions are answered deterministically (the model miscounts) — the
+# deterministic summary already states the exact totals + severity breakdown.
+COUNT_RE = re.compile(r"how many|how much|number of|\bcount\b|\btotal\b", re.I)
 
 
 def _extract_host(message: str):
@@ -135,6 +144,7 @@ def retrieve(db: Session, message: str) -> dict:
     """Pull authoritative facts for entities mentioned in the message."""
     blocks, citations = [], []
     scan_summary = None
+    resolved_scan = None
 
     # ---- CVE IDs ----
     for cid in dict.fromkeys(m.upper() for m in CVE_RE.findall(message)):
@@ -175,6 +185,7 @@ def retrieve(db: Session, message: str) -> dict:
                 if not scan:
                     scan_summary = f"I have no record of scan #{int(nm.group(1))} in the database."
     if scan is not None and scan_summary is None:
+        resolved_scan = scan
         citations.append(f"scan#{scan.id}")
         scan_summary = _scan_summary(db, scan)
         blocks.append(f"[SCAN]{note} " + scan_summary.replace("\n", " "))
@@ -203,12 +214,27 @@ def retrieve(db: Session, message: str) -> dict:
             blocks.append(f"[CLASS] {title}: {what} Fix: {fix}")
 
     return {"blocks": blocks, "citations": list(dict.fromkeys(citations)),
-            "scan_summary": scan_summary}
+            "scan_summary": scan_summary,
+            "scan_id": resolved_scan.id if resolved_scan else None,
+            "scan_context": _scan_context(db, resolved_scan) if resolved_scan else None}
+
+
+def _scan_inprogress(scan) -> str:
+    """Message for a scan that hasn't finished — don't present partial results as final."""
+    if scan.status in ("running", "queued", "pending"):
+        pct = f" ({scan.progress}% complete)" if scan.status == "running" else ""
+        return (f"**Scan #{scan.id} — {scan.scan_type}** is still **{scan.status}**{pct}. "
+                f"I'll have the full results once it finishes — ask me again then "
+                f"(or I'll post them automatically if I launched it).")
+    return ""
 
 
 def _scan_summary(db: Session, scan) -> str:
     """A deterministic, human-readable summary of a scan's results (no model involved,
     so aggregate counts are always correct)."""
+    pending = _scan_inprogress(scan)
+    if pending:
+        return pending
     sid = scan.id
     finds = db.query(Finding).filter(Finding.scan_id == sid).all()
     web = db.query(WebFinding).filter(WebFinding.scan_id == sid).all()
@@ -268,6 +294,68 @@ def _scan_summary(db: Session, scan) -> str:
     return "\n".join(lines)
 
 
+def _scan_context(db: Session, scan) -> str:
+    """A fuller, plain-language fact sheet for one scan — fed to the model so it can answer
+    a SPECIFIC question (e.g. 'what are the criticals?', 'remediation for X?'). Bounded."""
+    pending = _scan_inprogress(scan)
+    if pending:
+        return pending
+    sid = scan.id
+    lines = [f"Scan #{sid} type={scan.scan_type} status={scan.status} target={scan.target.address if scan.target else '?'}"]
+
+    if scan.scan_type == "cis_benchmark":
+        from .cis_runner import summarize_cis
+        m = summarize_cis(db, scan)
+        lines.append(f"distro={m['distro']} level={m['level']} engine={m['engine']} "
+                     f"score={m['score']} failed={m['fails']} of {m['total']} controls")
+        cfgs = [c for c in db.query(ConfigFinding).filter(ConfigFinding.scan_id == sid).all()
+                if c.check_id != "audit-summary"]
+        fails = [c for c in cfgs if c.status == "fail"]
+        rank = {"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1, "INFO": 0}
+        fails.sort(key=lambda c: rank.get(c.severity, 0), reverse=True)
+        lines.append("FAILED CONTROLS:")
+        for c in fails[:25]:
+            rem = (c.remediation or "").strip().replace("\n", " ")[:160]
+            lines.append(f"- [{c.severity}] {c.title or c.check_id}" + (f" — fix: {rem}" if rem else ""))
+        return "\n".join(lines)
+
+    finds = db.query(Finding).filter(Finding.scan_id == sid).all()
+    if finds:
+        cve_ids = {f.cve_id for f in finds}
+        cmap = {c.cve_id: c for c in db.query(CVE).filter(CVE.cve_id.in_(cve_ids)).all()} if cve_ids else {}
+        rank = {"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1}
+        # Severity-first so a "what are the criticals?" question surfaces actual CRITICALs
+        # (KEV is a tiebreaker within a severity, and is also flagged inline).
+        finds.sort(key=lambda f: (rank.get(f.severity, 0),
+                                  1 if (cmap.get(f.cve_id) and cmap[f.cve_id].kev) else 0,
+                                  f.cvss_score or 0), reverse=True)
+        sev = {}
+        for f in finds:
+            sev[f.severity] = sev.get(f.severity, 0) + 1
+        lines.append(f"TOTAL CVE findings: {len(finds)}")
+        lines.append("severity counts: " + ", ".join(f"{k}={v}" for k, v in sev.items()))
+        lines.append(f"(showing the top {min(20, len(finds))} of {len(finds)} below)")
+        lines.append("FINDINGS (highest risk first):")
+        for f in finds[:20]:
+            svc = f.service
+            pkg = (svc.product or svc.service_name or "") if svc else ""
+            c = cmap.get(f.cve_id)
+            rem = ((c.remediation if c else "") or "").strip().replace("\n", " ")[:140]
+            tag = " KEV" if (c and c.kev) else ""
+            lines.append(f"- {f.cve_id} {f.severity} CVSS={f.cvss_score or '?'}{tag} on {pkg or 'asset'}"
+                         + (f" — fix: {rem}" if rem else ""))
+    else:
+        lines.append("No CVE findings correlated.")
+
+    web = db.query(WebFinding).filter(WebFinding.scan_id == sid).all()
+    if web:
+        lines.append("WEB FINDINGS:")
+        for w in web[:15]:
+            rem = (w.remediation or "").strip().replace("\n", " ")[:140]
+            lines.append(f"- {w.name} [{w.category}] {w.severity}" + (f" — fix: {rem}" if rem else ""))
+    return "\n".join(lines)
+
+
 _SYSTEM = (
     "You are ThreatProbe's offline security assistant for an air-gapped VAPT platform. "
     "Answer ONLY using the facts in the CONTEXT block. Be concise, practical and accurate. "
@@ -289,11 +377,27 @@ def _fallback(message: str, ctx: dict) -> str:
 def answer(db: Session, message: str, history: list | None = None) -> dict:
     """Return {'reply': str, 'citations': [...], 'grounded': bool, 'model': bool}."""
     ctx = retrieve(db, message)
-    # Scan summaries are returned deterministically — a small model misreads aggregate
-    # counts (e.g. inverting "6 failed" into "no failures"), which is unacceptable here.
+    # Scan queries: a plain "summarise scan N" returns the DETERMINISTIC summary (a small
+    # model misreads aggregate counts — e.g. inverting "6 failed" into "no failures"). But
+    # a SPECIFIC question ("what are the criticals?", "remediation for X?") is answered by
+    # the model from the scan's fact sheet, so the user gets a focused insight, not a dump.
     if ctx.get("scan_summary"):
-        return {"reply": ctx["scan_summary"], "citations": ctx["citations"],
-                "grounded": True, "model": False}
+        specific = (bool(SPECIFIC_RE.search(message)) and not COUNT_RE.search(message)
+                    and ctx.get("scan_context"))
+        if not specific or not llm_available():
+            return {"reply": ctx["scan_summary"], "citations": ctx["citations"],
+                    "grounded": True, "model": False}
+        messages = [
+            {"role": "system", "content": _SYSTEM},
+            {"role": "user", "content": f"SCAN FACTS:\n{ctx['scan_context'][:4000]}\n\n"
+                                        f"Answer this question about the scan using ONLY the "
+                                        f"facts above, concisely: {message}"},
+        ]
+        try:
+            reply = _chat_llm(messages) or ctx["scan_summary"]
+        except Exception:
+            reply = ctx["scan_summary"]
+        return {"reply": reply, "citations": ctx["citations"], "grounded": True, "model": True}
     context_text = "\n".join(ctx["blocks"]) if ctx["blocks"] else "(no matching local records)"
     if not llm_available():
         return {"reply": _fallback(message, ctx), "citations": ctx["citations"],
