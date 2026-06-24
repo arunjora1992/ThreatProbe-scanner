@@ -192,15 +192,17 @@ def scan_web_findings(scan_id: int, db: Session = Depends(get_db),
 def scan_config_findings(scan_id: int, db: Session = Depends(get_db),
                          _: User = Depends(get_current_user)):
     """CIS-style hardening / misconfiguration findings from a credentialed scan."""
-    if not db.get(Scan, scan_id):
+    scan = db.get(Scan, scan_id)
+    if not scan:
         raise HTTPException(status_code=404, detail="Scan not found")
     rows = db.query(ConfigFinding).filter(ConfigFinding.scan_id == scan_id).all()
     sev_order = {"CRITICAL": 5, "HIGH": 4, "MEDIUM": 3, "LOW": 2, "INFO": 1}
     # Failures first (by severity), then passes/errors.
     rows.sort(key=lambda r: (r.status == "fail", sev_order.get(r.severity, 0)), reverse=True)
     fails = sum(1 for r in rows if r.status == "fail")
+    from ..services.cis_runner import summarize_cis
     return {
-        "total": len(rows), "fails": fails,
+        "total": len(rows), "fails": fails, "cis": summarize_cis(db, scan),
         "findings": [
             {
                 "host": r.host, "check_id": r.check_id, "title": r.title,

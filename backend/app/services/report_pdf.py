@@ -60,15 +60,43 @@ def _pie(pairs, color_list, width=200, height=130):
     d.add(pie)
     return d
 
+# Vibrant severity ramp — aligned with the web UI's SEV_COLOR for a consistent brand.
 SEVERITY_COLORS = {
-    "CRITICAL": colors.HexColor("#7e1416"),
-    "HIGH": colors.HexColor("#c0392b"),
-    "MEDIUM": colors.HexColor("#e67e22"),
-    "LOW": colors.HexColor("#2980b9"),
-    "NONE": colors.HexColor("#7f8c8d"),
-    "UNKNOWN": colors.HexColor("#7f8c8d"),
+    "CRITICAL": colors.HexColor("#be123c"),
+    "HIGH": colors.HexColor("#ef4444"),
+    "MEDIUM": colors.HexColor("#f59e0b"),
+    "LOW": colors.HexColor("#3b82f6"),
+    "INFO": colors.HexColor("#64748b"),
+    "NONE": colors.HexColor("#64748b"),
+    "UNKNOWN": colors.HexColor("#64748b"),
 }
 SEVERITY_ORDER = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "NONE", "UNKNOWN"]
+
+# Brand palette (matches the GUI indigo/violet gradient + cyan accent).
+BRAND = colors.HexColor("#4f46e5")
+BRAND_DARK = colors.HexColor("#4338ca")
+ACCENT = colors.HexColor("#22d3ee")
+HEADER_BG = BRAND          # table header rows
+PANEL_BG = colors.HexColor("#eef2ff")   # light indigo for label columns
+ZEBRA = colors.HexColor("#f7f8fc")
+
+
+def _title_band(ss, title, subtitle):
+    """A full-width branded header band (indigo) + cyan accent stripe."""
+    band = Table([[Paragraph(title, ss["BandTitle"])],
+                  [Paragraph(subtitle, ss["BandSub"])]], colWidths=[17 * cm])
+    band.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), BRAND),
+        ("LEFTPADDING", (0, 0), (-1, -1), 16),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 16),
+        ("TOPPADDING", (0, 0), (0, 0), 14),
+        ("BOTTOMPADDING", (0, 0), (0, 0), 2),
+        ("TOPPADDING", (0, 1), (0, 1), 0),
+        ("BOTTOMPADDING", (0, 1), (0, 1), 14),
+    ]))
+    stripe = Table([[""]], colWidths=[17 * cm], rowHeights=[3.5])
+    stripe.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), ACCENT)]))
+    return [band, stripe, Spacer(1, 0.5 * cm)]
 
 
 def _styles():
@@ -78,6 +106,10 @@ def _styles():
     ss.add(ParagraphStyle("H1c", parent=ss["Title"], fontSize=22, spaceAfter=6))
     ss.add(ParagraphStyle("Sub", parent=ss["Normal"], fontSize=11,
                           textColor=colors.HexColor("#555555")))
+    ss.add(ParagraphStyle("BandTitle", parent=ss["Title"], fontSize=21, spaceAfter=0,
+                          textColor=colors.white, alignment=TA_LEFT, leading=24))
+    ss.add(ParagraphStyle("BandSub", parent=ss["Normal"], fontSize=10.5,
+                          textColor=colors.HexColor("#c7d2fe")))
     return ss
 
 
@@ -104,10 +136,8 @@ def build_findings_pdf(db: Session, scan: Scan) -> bytes:
     titles = {"cis_benchmark": "CIS Benchmark / Hardening Report"}
     report_title = titles.get(stype, "Vulnerability Assessment Report")
 
-    # ---- Title ----
-    story.append(Paragraph(report_title, ss["H1c"]))
-    story.append(Paragraph("Air-Gapped Penetration Testing Platform", ss["Sub"]))
-    story.append(Spacer(1, 0.6 * cm))
+    # ---- Title band ----
+    story += _title_band(ss, report_title, "Air-Gapped Penetration Testing Platform")
 
     meta = [
         ["Target", f"{target.name} ({target.address})"],
@@ -126,12 +156,12 @@ def build_findings_pdf(db: Session, scan: Scan) -> bytes:
     t = Table(meta, colWidths=[4 * cm, 13 * cm])
     t.setStyle(TableStyle([
         ("FONTSIZE", (0, 0), (-1, -1), 9),
-        ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#f0f3f7")),
+        ("BACKGROUND", (0, 0), (0, -1), PANEL_BG),
         ("TEXTCOLOR", (0, 0), (0, -1), colors.HexColor("#333333")),
         ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
         ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#dddddd")),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("ROWBACKGROUNDS", (1, 0), (1, -1), [colors.white, colors.HexColor("#fafbfc")]),
+        ("ROWBACKGROUNDS", (1, 0), (1, -1), [colors.white, ZEBRA]),
     ]))
     story.append(t)
     story.append(Spacer(1, 0.6 * cm))
@@ -152,7 +182,7 @@ def build_findings_pdf(db: Session, scan: Scan) -> bytes:
         style = [
             ("FONTSIZE", (0, 0), (-1, -1), 9),
             ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#dddddd")),
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2c3e50")),
+            ("BACKGROUND", (0, 0), (-1, 0), BRAND),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
             ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
         ]
@@ -188,13 +218,13 @@ def build_findings_pdf(db: Session, scan: Scan) -> bytes:
             ])
         inv = Table(inv_rows, colWidths=[3 * cm, 3.5 * cm, 4 * cm, 6.5 * cm], repeatRows=1)
         inv.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2c3e50")),
+            ("BACKGROUND", (0, 0), (-1, 0), BRAND),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
             ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
             ("FONTSIZE", (0, 0), (-1, 0), 8),
             ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#dddddd")),
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
-            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#fafbfc")]),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, ZEBRA]),
         ]))
         story.append(inv)
     story.append(Spacer(1, 0.5 * cm))
@@ -252,7 +282,7 @@ def build_findings_pdf(db: Session, scan: Scan) -> bytes:
         dt = Table(detail_rows, colWidths=[3 * cm, 14 * cm])
         dt.setStyle(TableStyle([
             ("FONTSIZE", (0, 0), (-1, -1), 8),
-            ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#f0f3f7")),
+            ("BACKGROUND", (0, 0), (0, -1), PANEL_BG),
             ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
             ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#e0e0e0")),
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
@@ -296,7 +326,7 @@ def build_findings_pdf(db: Session, scan: Scan) -> bytes:
             dt = Table(rows, colWidths=[3 * cm, 14 * cm])
             dt.setStyle(TableStyle([
                 ("FONTSIZE", (0, 0), (-1, -1), 8),
-                ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#f0f3f7")),
+                ("BACKGROUND", (0, 0), (0, -1), PANEL_BG),
                 ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
                 ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#e0e0e0")),
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
@@ -313,22 +343,38 @@ def build_findings_pdf(db: Session, scan: Scan) -> bytes:
         story.append(Paragraph("CIS Benchmark / Hardening", ss["Heading2"]))
         passes = [c for c in cfg if c.status == "pass"]
         fails = [c for c in cfg if c.status == "fail"]
-        if summary_row and summary_row.detail:
-            story.append(Paragraph(summary_row.detail, ss["Sub"]))
+        # Distro + benchmark level + engine + score — the "what was assessed" context.
+        from .cis_runner import summarize_cis
+        m = summarize_cis(db, scan)
+        meta_rows = [
+            ["Distro", m["distro"]],
+            ["Benchmark level", m["level"]],
+            ["Engine", m["engine"]],
+            ["Compliance score", f"{m['score']:.1f}%" if m["score"] is not None else "-"],
+        ]
+        mt = Table(meta_rows, colWidths=[4 * cm, 13 * cm])
+        mt.setStyle(TableStyle([
+            ("FONTSIZE", (0, 0), (-1, -1), 9),
+            ("BACKGROUND", (0, 0), (0, -1), PANEL_BG),
+            ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#dddddd")),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ]))
+        story.append(mt)
         story.append(Spacer(1, 0.2 * cm))
         # pass/fail pie + counts
         pf_pie = _pie([("Pass", len(passes)), ("Fail", len(fails))],
-                      [colors.HexColor("#2e7d32"), colors.HexColor("#c0392b")])
+                      [colors.HexColor("#16a34a"), colors.HexColor("#be123c")])
         pf_tbl = Table([["Result", "Count"], ["Pass", str(len(passes))],
                         ["Fail", str(len(fails))], ["Total checks", str(len(cfg))]],
                        colWidths=[4 * cm, 3 * cm])
         pf_tbl.setStyle(TableStyle([
             ("FONTSIZE", (0, 0), (-1, -1), 9),
             ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#dddddd")),
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2c3e50")),
+            ("BACKGROUND", (0, 0), (-1, 0), BRAND),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
             ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-            ("TEXTCOLOR", (0, 2), (0, 2), colors.HexColor("#c0392b")),
+            ("TEXTCOLOR", (0, 2), (0, 2), colors.HexColor("#be123c")),
         ]))
         combo = Table([[pf_tbl, pf_pie]], colWidths=[8 * cm, 9 * cm])
         combo.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE")]))
@@ -352,13 +398,13 @@ def build_findings_pdf(db: Session, scan: Scan) -> bytes:
         if len(frows) > 1:
             ft = Table(frows, colWidths=[2 * cm, 6.5 * cm, 8.5 * cm], repeatRows=1)
             ft.setStyle(TableStyle([
-                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2c3e50")),
+                ("BACKGROUND", (0, 0), (-1, 0), BRAND),
                 ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
                 ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
                 ("FONTSIZE", (0, 0), (-1, -1), 7),
                 ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#dddddd")),
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#fafbfc")]),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, ZEBRA]),
             ]))
             story.append(ft)
 
@@ -381,9 +427,8 @@ def build_consolidated_pdf(data: dict) -> bytes:
     filters = meta.get("filters", {})
     counts = meta.get("counts", {})
 
-    story.append(Paragraph("Consolidated Vulnerability Report", ss["H1c"]))
-    story.append(Paragraph("Air-Gapped Penetration Testing Platform", ss["Sub"]))
-    story.append(Spacer(1, 0.5 * cm))
+    story += _title_band(ss, "Consolidated Vulnerability Report",
+                         "Air-Gapped Penetration Testing Platform")
 
     # ---- Filter / scope summary ----
     story.append(Paragraph("Report scope & filters", ss["Heading2"]))
@@ -405,7 +450,7 @@ def build_consolidated_pdf(data: dict) -> bytes:
     t = Table(frows, colWidths=[5 * cm, 12 * cm])
     t.setStyle(TableStyle([
         ("FONTSIZE", (0, 0), (-1, -1), 9),
-        ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#f0f3f7")),
+        ("BACKGROUND", (0, 0), (0, -1), PANEL_BG),
         ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
         ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#dddddd")),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
@@ -426,7 +471,7 @@ def build_consolidated_pdf(data: dict) -> bytes:
     style = [
         ("FONTSIZE", (0, 0), (-1, -1), 9),
         ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#dddddd")),
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2c3e50")),
+        ("BACKGROUND", (0, 0), (-1, 0), BRAND),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
     ]
@@ -451,7 +496,7 @@ def build_consolidated_pdf(data: dict) -> bytes:
         dt = Table(rows, colWidths=[3 * cm, 14 * cm])
         dt.setStyle(TableStyle([
             ("FONTSIZE", (0, 0), (-1, -1), 8),
-            ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#f0f3f7")),
+            ("BACKGROUND", (0, 0), (0, -1), PANEL_BG),
             ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
             ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#e0e0e0")),
             ("VALIGN", (0, 0), (-1, -1), "TOP"),

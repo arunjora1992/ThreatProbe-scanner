@@ -11,9 +11,47 @@
   const statusBadge = (s) => `<span class="status-badge status-${esc(s)}">${esc(s)}</span>`;
   const fmtDate = (d) => d ? new Date(d).toLocaleString() : "—";
 
+  // ---------- inline SVG icon set (framework-free, CSP-safe, air-gap friendly) ----------
+  const ICONS = {
+    dashboard: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/>',
+    targets: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.4" fill="currentColor"/>',
+    scans: '<circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>',
+    schedules: '<rect x="3" y="4.5" width="18" height="16.5" rx="2"/><line x1="16" y1="2.5" x2="16" y2="6.5"/><line x1="8" y1="2.5" x2="8" y2="6.5"/><line x1="3" y1="10" x2="21" y2="10"/>',
+    cves: '<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M20 5v14c0 1.66-3.58 3-8 3s-8-1.34-8-3V5"/><path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3"/>',
+    reports: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/>',
+    settings: '<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1.5" y1="14" x2="6.5" y2="14"/><line x1="9.5" y1="8" x2="14.5" y2="8"/><line x1="17.5" y1="16" x2="22.5" y2="16"/>',
+    users: '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+    about: '<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="11.5"/><line x1="12" y1="8" x2="12.01" y2="8"/>',
+    activity: '<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>',
+    alert: '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13.5"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
+    flame: '<path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.07-2.14-.22-4.05 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.15.43-2.29 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>',
+    server: '<rect x="2" y="3" width="20" height="8" rx="2"/><rect x="2" y="13" width="20" height="8" rx="2"/><line x1="6" y1="7" x2="6.01" y2="7"/><line x1="6" y1="17" x2="6.01" y2="17"/>',
+  };
+  function icon(name, cls) {
+    return `<svg class="ic ${cls || ""}" viewBox="0 0 24 24" fill="none" stroke="currentColor" `
+      + `stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">`
+      + `${ICONS[name] || ICONS.activity}</svg>`;
+  }
+  // Standard page header: gradient icon chip + title + optional right-aligned actions HTML.
+  function pageHead(name, title, right) {
+    return `<div class="page-head">`
+      + `<div class="ph-title"><span class="ph-icon">${icon(name)}</span><h1>${title}</h1></div>`
+      + (right ? `<div class="ph-actions">${right}</div>` : "")
+      + `</div>`;
+  }
+  const NAV_LABELS = { dashboard: "Dashboard", targets: "Targets", scans: "Scans",
+    schedules: "Schedules", cves: "CVE Database", reports: "Reports",
+    settings: "Settings", users: "Users", about: "About" };
+  function applyNavIcons() {
+    document.querySelectorAll(".nav-item").forEach((el) => {
+      const r = el.dataset.route;
+      if (NAV_LABELS[r]) el.innerHTML = icon(r, "nav-ic") + `<span>${NAV_LABELS[r]}</span>`;
+    });
+  }
+
   // ---------- inline SVG charts (framework-free, CSP-safe) ----------
-  const SEV_COLOR = { CRITICAL: "#7e1416", HIGH: "#c0392b", MEDIUM: "#e67e22",
-                      LOW: "#2980b9", INFO: "#7f8c8d", NONE: "#7f8c8d", UNKNOWN: "#7f8c8d" };
+  const SEV_COLOR = { CRITICAL: "#be123c", HIGH: "#ef4444", MEDIUM: "#f59e0b",
+                      LOW: "#3b82f6", INFO: "#64748b", NONE: "#64748b", UNKNOWN: "#64748b" };
   // Donut from segments [{value,color}], with a centre label. Pure SVG via stroke-dasharray.
   function svgDonut(segments, centerTop, centerBot) {
     const total = segments.reduce((a, s) => a + s.value, 0) || 1;
@@ -115,6 +153,7 @@
     applyTheme(cur === "light" ? "dark" : "light");
   };
   applyTheme(localStorage.getItem("pt_theme") || "dark");
+  applyNavIcons();
 
   // ---------- routing (path-based, reflected in the browser URL) ----------
   const ROUTES = { dashboard: renderDashboard, targets: renderTargets, scans: renderScans,
@@ -154,7 +193,7 @@
 
   // ---------- Dashboard ----------
   async function renderDashboard() {
-    view.innerHTML = `<div class="page-head"><h1>Dashboard</h1></div>` + loading();
+    view.innerHTML = pageHead("dashboard", "Dashboard") + loading();
     try {
       const s = await API.get("/api/dashboard/stats");
       const sev = s.severity_breakdown || {};
@@ -164,13 +203,14 @@
 
       // Stat cards — KEV and Critical/High get accent treatment.
       const cardDefs = [
-        ["Targets", s.targets, ""], ["Scans", s.scans, ""],
-        ["Hosts", s.hosts, ""], ["CVEs in DB", (s.cves || 0).toLocaleString(), ""],
-        ["Open Crit/High", s.crit_high_open ?? 0, "crit"],
-        ["Exploited (KEV)", s.kev_findings ?? 0, "kev"],
+        ["Targets", s.targets, "", "targets"], ["Scans", s.scans, "", "scans"],
+        ["Hosts", s.hosts, "", "server"], ["CVEs in DB", (s.cves || 0).toLocaleString(), "", "cves"],
+        ["Open Crit/High", s.crit_high_open ?? 0, "crit", "alert"],
+        ["Exploited (KEV)", s.kev_findings ?? 0, "kev", "flame"],
       ];
-      const cards = cardDefs.map(([l, n, cls]) =>
+      const cards = cardDefs.map(([l, n, cls, ic]) =>
         `<div class="card stat-card ${cls === "kev" ? "stat-kev" : cls === "crit" ? "stat-crit" : ""}">
+          <div class="stat-ic">${icon(ic)}</div>
           <div class="stat-num">${n}</div><div class="stat-label">${l}</div></div>`).join("");
 
       // Scan-status breakdown bars.
@@ -197,8 +237,7 @@
           <td class="small">${fmtDate(sc.created_at)}</td></tr>`).join("") ||
         `<tr><td colspan="5" class="empty">No scans yet</td></tr>`;
 
-      view.innerHTML = `
-        <div class="page-head"><h1>Dashboard</h1></div>
+      view.innerHTML = pageHead("dashboard", "Dashboard") + `
         <div class="grid stat-grid">${cards}</div>
         <div class="chart-row" style="margin-top:18px">
           ${chartCard("Findings by severity",
@@ -221,8 +260,8 @@
 
   // ---------- Targets ----------
   async function renderTargets() {
-    view.innerHTML = `<div class="page-head"><h1>Targets</h1>
-      <button class="btn btn-primary" onclick="ptNewTarget()">+ Add target</button></div>` + loading();
+    view.innerHTML = pageHead("targets", "Targets",
+      `<button class="btn btn-primary" onclick="ptNewTarget()">+ Add target</button>`) + loading();
     try {
       const targets = await API.get("/api/targets");
       const rows = targets.map((t) => `
@@ -237,8 +276,8 @@
             <button class="btn btn-sm btn-danger" onclick="ptDelTarget(${t.id})">Delete</button>
           </td></tr>`).join("") ||
         `<tr><td colspan="5" class="empty">No targets. Add one to begin.</td></tr>`;
-      view.innerHTML = `<div class="page-head"><h1>Targets</h1>
-        <button class="btn btn-primary" onclick="ptNewTarget()">+ Add target</button></div>
+      view.innerHTML = pageHead("targets", "Targets",
+        `<button class="btn btn-primary" onclick="ptNewTarget()">+ Add target</button>`) + `
         <div class="table-wrap"><table>
         <thead><tr><th>Name</th><th>Address / URL</th><th>Tags</th><th>Description</th><th>Actions</th></tr></thead>
         <tbody>${rows}</tbody></table></div>`;
@@ -435,8 +474,8 @@
   async function renderScans() {
     // Build the static shell ONCE; polling only updates the tbody so the page
     // doesn't flicker / lose scroll position on each refresh.
-    view.innerHTML = `<div class="page-head"><h1>Scans</h1>
-      <span class="muted small">Auto-refreshing</span></div>
+    view.innerHTML = pageHead("scans", "Scans",
+      `<span class="muted small">⟳ Auto-refreshing</span>`) + `
       <div class="table-wrap"><table>
       <thead><tr><th>Scan</th><th>Target</th><th>Type</th><th>Status</th><th>By</th><th>Created</th><th></th></tr></thead>
       <tbody id="scans-tbody"><tr><td colspan="7">${loading()}</td></tr></tbody></table></div>`;
@@ -489,8 +528,8 @@
     ["zap_passive", "ZAP passive"], ["zap_active", "ZAP active"], ["custom", "Custom nmap"],
   ];
   async function renderSchedules() {
-    view.innerHTML = `<div class="page-head"><h1>Scheduled scans</h1>
-      <button class="btn btn-primary" onclick="ptNewSchedule()">+ New schedule</button></div>
+    view.innerHTML = pageHead("schedules", "Scheduled scans",
+      `<button class="btn btn-primary" onclick="ptNewSchedule()">+ New schedule</button>`) + `
       <p class="muted small">Recurring scans run automatically. Credentialed/CIS scans aren't schedulable (they need in-memory credentials that are never stored).</p>
       <div id="sched-box">${loading()}</div>`;
     try {
@@ -633,19 +672,15 @@
         }).join("");
       }
 
-      view.innerHTML = `
-        <div class="page-head">
-          <h1>Scan #${scan.id} <span class="muted" style="font-size:14px">${esc(scan.scan_type)}</span></h1>
-          <div class="pill-row">
-            <button class="btn" onclick="ptRoute('scans')">← Back</button>
-            ${(scan.status === "running" || scan.status === "queued") ? `<button class="btn" onclick="ptCancelScan(${scan.id})">⏹ Stop</button>` : ""}
-            <button class="btn" onclick="ptRescan(${scan.target_id}, '${esc(scan.scan_type)}')">🔄 Rescan</button>
-            <button class="btn btn-primary" onclick="ptDownload(${scan.id},'pdf')">⬇ PDF report</button>
-            <button class="btn btn-primary" onclick="ptDownload(${scan.id},'csv')">⬇ CSV report</button>
-            ${scan.scan_type === "credentialed" ? `<button class="btn" onclick="ptDownloadPkgs(${scan.id})">⬇ Package inventory CSV</button>` : ""}
-            <button class="btn" onclick="ptEmailScan(${scan.id})">✉ Email report</button>
-          </div>
-        </div>
+      view.innerHTML = pageHead("activity",
+        `Scan #${scan.id} <span class="muted" style="font-size:14px">${esc(scan.scan_type)}</span>`,
+        `<button class="btn" onclick="ptRoute('scans')">← Back</button>`
+        + ((scan.status === "running" || scan.status === "queued") ? `<button class="btn" onclick="ptCancelScan(${scan.id})">⏹ Stop</button>` : "")
+        + `<button class="btn" onclick="ptRescan(${scan.target_id}, '${esc(scan.scan_type)}')">🔄 Rescan</button>`
+        + `<button class="btn btn-primary" onclick="ptDownload(${scan.id},'pdf')">⬇ PDF report</button>`
+        + `<button class="btn btn-primary" onclick="ptDownload(${scan.id},'csv')">⬇ CSV report</button>`
+        + (scan.scan_type === "credentialed" ? `<button class="btn" onclick="ptDownloadPkgs(${scan.id})">⬇ Package inventory CSV</button>` : "")
+        + `<button class="btn" onclick="ptEmailScan(${scan.id})">✉ Email report</button>`) + `
         <div class="card">
           <div class="detail-grid">
             <span class="k">Status</span><span id="scan-status">${statusBadge(scan.status)} ${scan.status==="running"?scan.progress+"%":""}</span>
@@ -789,8 +824,9 @@
         box.innerHTML = `<p class="muted small">No hardening data (older scan, or checks could not run).</p>`;
         return;
       }
+      const m = data.cis || {};
       if (cnt) cnt.innerHTML = `· <b style="color:var(--high)">${data.fails} failed</b> of ${findings.length}`
-        + (summary ? ` · <span class="muted">${esc(summary.detail)}</span>` : "");
+        + ` · <span class="muted">${esc(m.distro || "")} · ${esc(m.level || "")}</span>`;
 
       // CIS charts: compliance-score donut + pass/fail + failed-by-severity.
       const cbox = document.getElementById("scan-charts");
@@ -824,7 +860,14 @@
           <td class="small">${f.status === "fail" ? esc(f.remediation) : "—"}</td>
         </tr>`;
       }).join("");
-      box.innerHTML = `<div class="table-wrap"><table class="fixed">
+      const banner = `<div class="cis-banner">
+        <div class="cis-chip"><span class="k">Distro</span><span class="v">${esc(m.distro || "unknown")}</span></div>
+        <div class="cis-chip"><span class="k">Benchmark level</span><span class="v">${esc(m.level || "—")}</span></div>
+        <div class="cis-chip"><span class="k">Engine</span><span class="v">${esc(m.engine || "—")}</span></div>
+        ${m.score != null ? `<div class="cis-chip score"><span class="k">Compliance</span><span class="v">${m.score}%</span></div>` : ""}
+        <div class="cis-chip"><span class="k">Controls failed</span><span class="v" style="color:var(--high)">${data.fails} / ${findings.length}</span></div>
+      </div>`;
+      box.innerHTML = banner + `<div class="table-wrap"><table class="fixed">
         <colgroup><col style="width:12%"><col style="width:55%"><col style="width:33%"></colgroup>
         <thead><tr><th>Result</th><th>Check</th><th>Remediation</th></tr></thead>
         <tbody>${rows}</tbody></table></div>`;
@@ -862,15 +905,13 @@
 
   // ---------- CVEs ----------
   async function renderCves() {
-    view.innerHTML = `<div class="page-head"><h1>CVE Database</h1>
-      <div class="pill-row">
-        <button class="btn" onclick="ptExportCveDb()">⬇ Download CVE DB</button>
+    view.innerHTML = pageHead("cves", "CVE Database",
+      `<button class="btn" onclick="ptExportCveDb()">⬇ Download CVE DB</button>
         <button class="btn admin-only" onclick="document.getElementById('cve-upload-file').click()">⬆ Upload CVE DB</button>
         <button class="btn btn-primary admin-only" onclick="ptImportFeeds()">⬆ Import NVD feeds</button>
         <button class="btn admin-only" onclick="ptImportThreatIntel()" title="Enrich CVEs with CISA KEV (exploited-in-the-wild) + FIRST EPSS scores">🎯 Import KEV / EPSS</button>
         <button class="btn admin-only" onclick="ptImportDistroFeeds()" title="Import vendor advisories (OVAL / Debian JSON) for backport-aware package matching">🐧 Import distro feeds</button>
-        <input type="file" id="cve-upload-file" accept=".json,.gz,.json.gz,.json.xz" style="display:none" onchange="ptUploadCveDb(this)">
-      </div></div>`
+        <input type="file" id="cve-upload-file" accept=".json,.gz,.json.gz,.json.xz" style="display:none" onchange="ptUploadCveDb(this)">`)
       + `<div class="toolbar">
           <input id="cve-q" placeholder="Search CVE id, description, product…" style="min-width:240px">
           <input id="cve-product" placeholder="Affected package / product…" style="min-width:180px">
@@ -1088,14 +1129,13 @@
     }).join("");
   }
   async function renderReports() {
-    view.innerHTML = `<div class="page-head"><h1>Reports</h1></div>` + loading();
+    view.innerHTML = pageHead("reports", "Reports") + loading();
     let targets = [];
     try { targets = await API.get("/api/targets"); } catch (ex) { view.innerHTML = errBox(ex); return; }
     const targetOpts = `<option value="">All scans / all targets</option>` +
       targets.map((t) => `<option value="${t.id}">${esc(t.name)} (${esc(t.address)})</option>`).join("");
-    view.innerHTML = `
-      <div class="page-head"><h1>Reports</h1>
-        <span class="muted small">Build a consolidated, filtered report across scans</span></div>
+    view.innerHTML = pageHead("reports", "Reports",
+      `<span class="muted small">Build a consolidated, filtered report across scans</span>`) + `
       <div class="card">
         <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(240px,1fr))">
           <div class="form-row"><label>Scope (target)</label><select id="rp-target">${targetOpts}</select></div>
@@ -1179,11 +1219,10 @@
 
   // ---------- Settings (SMTP / email) ----------
   async function renderSettings() {
-    view.innerHTML = `<div class="page-head"><h1>Settings</h1></div>` + loading();
+    view.innerHTML = pageHead("settings", "Settings") + loading();
     try {
       const [c, b] = await Promise.all([API.get("/api/settings/smtp"), API.get("/api/branding")]);
-      view.innerHTML = `
-        <div class="page-head"><h1>Settings</h1></div>
+      view.innerHTML = pageHead("settings", "Settings") + `
         <div class="card" style="max-width:620px;margin-bottom:18px">
           <h3 class="section-title" style="margin-top:0">Branding</h3>
           <p class="muted small" style="margin-bottom:12px">Customize the application name and logo shown on the login page and sidebar (white-labelling).</p>
@@ -1299,16 +1338,16 @@
 
   // ---------- Users ----------
   async function renderUsers() {
-    view.innerHTML = `<div class="page-head"><h1>Users</h1>
-      <button class="btn btn-primary" onclick="ptNewUser()">+ Add user</button></div>` + loading();
+    view.innerHTML = pageHead("users", "Users",
+      `<button class="btn btn-primary" onclick="ptNewUser()">+ Add user</button>`) + loading();
     try {
       const users = await API.get("/api/auth/users");
       const rows = users.map((u) => `
         <tr><td><b>${esc(u.username)}</b></td><td>${esc(u.role)}</td>
         <td>${u.is_active ? "active" : "disabled"}</td>
         <td><button class="btn btn-sm btn-danger" onclick="ptDelUser(${u.id})">Delete</button></td></tr>`).join("");
-      view.innerHTML = `<div class="page-head"><h1>Users</h1>
-        <button class="btn btn-primary" onclick="ptNewUser()">+ Add user</button></div>
+      view.innerHTML = pageHead("users", "Users",
+        `<button class="btn btn-primary" onclick="ptNewUser()">+ Add user</button>`) + `
         <div class="table-wrap"><table>
         <thead><tr><th>Username</th><th>Role</th><th>Status</th><th></th></tr></thead>
         <tbody>${rows}</tbody></table></div>`;
@@ -1342,14 +1381,13 @@
   // ---------- About ----------
   async function renderAbout() {
     const name = (window._branding && window._branding.app_name) || "ThreatProbe Scanner";
-    view.innerHTML = `<div class="page-head"><h1>About</h1></div>` + loading();
+    view.innerHTML = pageHead("about", "About") + loading();
     let stats = {};
     try { stats = await API.get("/api/dashboard/stats"); } catch {}
     const feat = (icon, title, body) =>
       `<div class="card about-feat"><div class="about-ic">${icon}</div><div><b>${title}</b><div class="muted small">${body}</div></div></div>`;
     const scanType = (name, body) => `<tr><td><b>${esc(name)}</b></td><td class="small">${body}</td></tr>`;
-    view.innerHTML = `
-      <div class="page-head"><h1>About ${esc(name)}</h1></div>
+    view.innerHTML = pageHead("about", `About ${esc(name)}`) + `
       <div class="card about-hero">
         <div class="about-logo">${_logoHtml(window._branding || {}, 64)}</div>
         <div>

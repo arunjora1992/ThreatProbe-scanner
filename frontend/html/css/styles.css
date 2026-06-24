@@ -9,9 +9,11 @@
   --primary: #6366f1;
   --primary-h: #818cf8;
   --accent: #22d3ee;
-  --grad: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
-  --crit: #b3122b;
-  --high: #e03e3e;
+  --accent-2: #f472b6;
+  --grad: linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #d946ef 100%);
+  --grad-soft: linear-gradient(135deg, rgba(99,102,241,.18), rgba(217,70,239,.10));
+  --crit: #be123c;
+  --high: #ef4444;
   --med: #f59e0b;
   --low: #3b82f6;
   --info: #64748b;
@@ -265,9 +267,81 @@ input:focus, select:focus, textarea:focus, .login-card input:focus { box-shadow:
 
 @media (max-width: 760px) {
   .sidebar { width: 62px; }
-  .brand span, .nav-item { font-size: 0; }
+  .brand span, .nav-item span { font-size: 0; }
+  .nav-item { justify-content: center; }
   .content { padding: 18px 14px; }
 }
+
+/* ============================================================
+   Vibrant refresh (2026) — SVG icon system, glassy cards, KPI accents.
+   ============================================================ */
+
+/* Ambient gradient wash behind the app content for depth */
+.content {
+  background:
+    radial-gradient(1100px 380px at 88% -8%, color-mix(in srgb, var(--primary) 13%, transparent), transparent 70%),
+    radial-gradient(900px 360px at 0% 4%, color-mix(in srgb, var(--accent-2) 9%, transparent), transparent 70%);
+}
+
+/* Page headings: gradient icon chip + heavier title */
+.page-head { padding-bottom: 14px; border-bottom: 1px solid var(--border); }
+.ph-title { display: flex; align-items: center; gap: 13px; min-width: 0; }
+.ph-icon {
+  width: 40px; height: 40px; border-radius: 12px; flex: none;
+  display: grid; place-items: center; color: #fff; background-image: var(--grad);
+  box-shadow: 0 8px 20px -4px color-mix(in srgb, var(--primary) 65%, transparent);
+}
+.ph-icon svg { width: 21px; height: 21px; }
+.ph-title h1 { font-size: 23px; }
+.ph-actions { display: flex; gap: 9px; flex-wrap: wrap; align-items: center; justify-content: flex-end; }
+.ic { width: 20px; height: 20px; stroke: currentColor; }
+
+/* Sidebar nav: SVG icons aligned with labels */
+.nav-item { display: flex; align-items: center; gap: 11px; }
+.nav-ic { width: 19px; height: 19px; flex: none; stroke: currentColor; }
+.brand { display: flex; align-items: center; gap: 9px; }
+
+/* Stat cards: corner icon chip + colored top accent; vivid number */
+.stat-card { position: relative; overflow: hidden; }
+.stat-card::after {
+  content: ""; position: absolute; inset: 0 0 auto 0; height: 3px; background-image: var(--grad);
+}
+.stat-ic {
+  position: absolute; top: 14px; right: 14px; width: 36px; height: 36px; border-radius: 10px;
+  display: grid; place-items: center; color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
+}
+.stat-ic svg { width: 19px; height: 19px; }
+.stat-card .stat-num { font-size: 32px; }
+.stat-card.stat-crit::after { background-image: linear-gradient(135deg,#f43f5e,#be123c); }
+.stat-card.stat-crit .stat-ic { color: var(--high); background: color-mix(in srgb, var(--high) 16%, transparent); }
+.stat-card.stat-kev::after { background-image: linear-gradient(135deg,#fb7185,#9f1239); }
+.stat-card.stat-kev .stat-ic { color: var(--crit); background: color-mix(in srgb, var(--crit) 18%, transparent); }
+
+/* Cards a touch glassier */
+.card { background-image: linear-gradient(180deg, color-mix(in srgb, var(--panel) 92%, transparent), var(--panel)); backdrop-filter: blur(2px); }
+
+/* Chart cards get a subtle gradient header underline */
+.chart-card > .muted.small:first-child { font-weight: 600; color: var(--text); letter-spacing: .02em; }
+
+/* Severity badges: subtle glow so criticals pop */
+.badge.sev-CRITICAL { box-shadow: 0 0 0 1px color-mix(in srgb, var(--crit) 50%, transparent), 0 2px 8px -1px color-mix(in srgb, var(--crit) 55%, transparent); }
+.badge.sev-HIGH { box-shadow: 0 2px 8px -2px color-mix(in srgb, var(--high) 55%, transparent); }
+
+/* Section titles: gradient bar already; bump weight */
+.section-title { font-weight: 700; }
+
+/* Prominent CIS summary banner (distro / level / engine / score) */
+.cis-banner {
+  display: flex; flex-wrap: wrap; gap: 10px; margin: 6px 0 14px;
+}
+.cis-chip {
+  display: flex; flex-direction: column; gap: 2px; padding: 10px 16px; border-radius: 12px;
+  border: 1px solid var(--border); background: var(--grad-soft); min-width: 120px;
+}
+.cis-chip .k { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.cis-chip .v { font-size: 15px; font-weight: 700; }
+.cis-chip.score .v { background-image: var(--grad); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
 
 /* ---- About page ---- */
 .about-hero { display: flex; gap: 20px; align-items: center; box-shadow: var(--shadow); }

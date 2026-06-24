@@ -5,6 +5,7 @@ because the SSH credentials it uses must never be persisted. Over the SSH sessio
 the official CIS profile via OpenSCAP when the target has it, otherwise a built-in set of
 read-only hardening checks. Results are stored as ConfigFinding rows; credentials are not.
 """
+import re
 import threading
 from datetime import datetime
 from typing import Optional
@@ -20,13 +21,67 @@ _SEV = {"CRITICAL": 5, "HIGH": 4, "MEDIUM": 3, "LOW": 2, "INFO": 1, "NONE": 0}
 
 
 def _level_label(profile: str) -> str:
-    """Friendly CIS level from an SSG profile id (xccdf_..._profile_cis_server_l1)."""
+    """Friendly CIS level from an SSG profile id or our dropdown token.
+
+    Handles e.g. 'xccdf_..._profile_cis_server_l1', '_cis_workstation_l2', and the bare
+    '_cis'/'…_profile_cis' which is SSG's Level 2 Server profile (no explicit l2 suffix)."""
     p = (profile or "").lower()
-    lvl = "Level 2" if "l2" in p or "level2" in p else ("Level 1" if "l1" in p or "level1" in p
-                                                        else "")
     plat = "Workstation" if "workstation" in p else ("Server" if "server" in p else "")
+    if "l2" in p or "level2" in p:
+        lvl = "Level 2"
+    elif "l1" in p or "level1" in p:
+        lvl = "Level 1"
+    elif p.endswith("_cis") or p.endswith("profile_cis") or p == "cis":
+        lvl, plat = "Level 2", plat or "Server"   # bare CIS profile == Level 2 Server
+    else:
+        lvl = ""
     label = " ".join(x for x in ("CIS", lvl, plat) if x).strip()
-    return label or (profile.split("_profile_")[-1] if "_profile_" in profile else profile) or "CIS"
+    return label or "CIS"
+
+
+def _clean_distro(name: str) -> str:
+    """Collapse a duplicated trailing version token, e.g. 'CentOS Stream 9 9' -> '…9'."""
+    toks = (name or "").split()
+    if len(toks) >= 2 and toks[-1] == toks[-2]:
+        toks = toks[:-1]
+    return " ".join(toks)
+
+
+def summarize_cis(db, scan) -> dict:
+    """Structured CIS run metadata (distro / level / engine / score) for the GUI banner
+    and PDF report. Robust to older scans: derives the level from the audit-summary
+    detail when present, else from the scan profile, and the distro from the host OS —
+    so 'which distro & level' always renders even on scans run before this existed."""
+    rows = db.query(ConfigFinding).filter(ConfigFinding.scan_id == scan.id).all()
+    summary = next((r for r in rows if r.check_id == "audit-summary"), None)
+    detail = (summary.detail if summary else "") or ""
+    host = db.query(Host).filter(Host.scan_id == scan.id).first()
+    checks = [r for r in rows if r.check_id != "audit-summary"]
+    fails = sum(1 for r in checks if r.status == "fail")
+
+    distro = (host.os_guess.strip() if host and host.os_guess else "")
+    if not distro and "·" in detail:
+        distro = detail.split("·")[0].strip()
+    distro = _clean_distro(distro)
+
+    low = detail.lower()
+    engine = "OpenSCAP" if "openscap" in low else ("Built-in checks" if "built-in" in low else "")
+
+    m = re.search(r"(CIS Level\s*\d[^·]*)", detail)
+    level = m.group(1).strip() if m else ""
+    if not level:
+        tok = (scan.profile or "").split()[-1] if scan.profile else ""
+        if tok and tok != "cis-benchmark":
+            level = _level_label(tok)
+
+    ms = re.search(r"score\s*([\d.]+)%", detail)
+    score = float(ms.group(1)) if ms else None
+
+    return {
+        "distro": distro or "unknown", "level": level or "—",
+        "engine": engine or "—", "score": score,
+        "total": len(checks), "fails": fails,
+    }
 
 
 def _assess_host(db, scan, host_addr, port, username, password, key_text, key_passphrase,

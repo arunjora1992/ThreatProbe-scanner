@@ -64,6 +64,7 @@ with vulnerability, severity, CVSS, and remediation details.
 - **Risk prioritization (KEV + EPSS)** — findings and the CVE browser are ranked by **CISA KEV** (actively-exploited) then **FIRST EPSS** likelihood, not just CVSS — so the riskiest items surface first (see below).
 - **CIS benchmark / hardening** — authenticated CIS audits via **OpenSCAP** (auto-installed on the target when missing) with selectable **Level 1/2 Server/Workstation** profiles, plus a built-in agentless fallback (see below).
 - **Modern dashboard** — severity donut, scan-status chart, and a **Top priorities** panel (exploited / high-risk findings).
+- **Vibrant UI** — indigo/violet gradient theme with a consistent inline-SVG icon set per page (no external assets — air-gap safe), icon-led KPI cards, and brand-matched **PDF reports** (indigo header band, cyan accent, colour-coded severity).
 - **White-label branding** — set a custom **application name, logo, and favicon** (emoji or an uploaded PNG/SVG) from **Settings → Branding**; applied to the login page, sidebar, and browser tab. An in-app **About** page describes the tool.
 - **Dark / light theme** toggle (persisted per browser).
 
@@ -353,7 +354,9 @@ Two engines, auto-selected:
   unneeded filesystem modules, world-writable files/dirs, cron permissions, and more.
 
 Results appear in a **CIS benchmark / hardening results** section on the scan detail page,
-failures ranked by severity, with the engine + score in the header. All checks are
+led by a summary banner showing the **distro assessed, the benchmark level (e.g. CIS Level 1
+Server), the engine, and the compliance score**, then failures ranked by severity. The same
+distro + level + engine + score appear in the PDF report. All checks are
 **read-only** and best-effort: one that can't run (e.g. `/etc/shadow` needs more privilege
 than the scan account has) is reported as *n/a* rather than a false pass/fail — so prefer a
 scan account with adequate `sudo`/read access for full coverage.
@@ -367,7 +370,11 @@ already patched. To fix this, load **vendor security advisories** and the creden
 package audit will use the distro's *fixed version* instead of NVD.
 
 Supported, air-gap-friendly feeds — drop them in **`data/cve_feeds/distro_feeds/`** then
-**CVE Database → 🐧 Import distro feeds** (or `POST /api/cves/distro-feeds/import`):
+**CVE Database → 🐧 Import distro feeds** (or `POST /api/cves/distro-feeds/import`). On a
+**connected** host the button offers to **download the curated vendor OVAL feeds online**
+(RHEL 8/9, Oracle Linux, Ubuntu LTS) into that directory first — and the downloaded files
+**persist on disk**, so you can copy `data/cve_feeds/` to an air-gapped host and import
+there offline (`?online=true` triggers the fetch):
 
 - **OVAL v2** (XML, `.bz2`/`.gz` ok) — covers **RHEL / CentOS, Oracle Linux (ELSA),
   Rocky / Alma, Ubuntu**. The parser reads the distro + release from each definition,
@@ -495,8 +502,23 @@ epss_scores-current.csv.gz             # https://epss.cyentia.com/epss_scores-cu
 ```
 
 Then **CVE Database → 🎯 Import KEV / EPSS** (admin), or `POST /api/cves/threat-intel/import`
-(add `?online=true` on a connected host to fetch them directly). Enrichment only updates
-existing CVEs, so import NVD feeds first.
+(add `?online=true` on a connected host to fetch them directly). The online fetch **saves
+the downloaded files** into `data/cve_feeds/`, so a connected host produces exactly the
+files an air-gapped host needs. Enrichment only updates existing CVEs, so import NVD feeds first.
+
+#### Feed directory — one persistent location for everything
+
+All feed data lives under **`/data/cve_feeds`**, mounted from the host via the `./data:/data`
+bind mount in `docker-compose.yml` — it **persists across container rebuilds**. To seed an
+air-gapped deployment, copy this one folder across:
+
+```
+data/cve_feeds/
+├── _auto/CVE-YYYY.json.xz                  NVD CVE feed (online updater keeps it on disk)
+├── known_exploited_vulnerabilities.json    CISA KEV
+├── epss_scores-current.csv.gz              FIRST EPSS
+└── distro_feeds/*.xml.bz2                  vendor OVAL (RHEL / Oracle / Ubuntu …)
+```
 
 Findings and the CVE browser are then **risk-ranked**: actively-exploited (KEV) first,
 then by EPSS likelihood, then severity/CVSS — so the CVE most likely to be used against
