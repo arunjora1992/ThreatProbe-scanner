@@ -224,6 +224,7 @@
   })();
   let _aiBuilt = false;
   let _aiScan = null;  // transient scan-wizard state — NEVER persisted (holds in-memory creds)
+  let _aiLastScanId = null;  // last scan the AI launched/watched — lets "cancel it" resolve
   function buildAssistant() {
     if (_aiBuilt) return;
     const root = document.getElementById("ai-root");
@@ -444,18 +445,40 @@
       } catch (ex) { aiPush("assistant", `I couldn't find scan #${id}.`); }
       return true;
     }
-    // --- stop / cancel scan N ---
-    let m = /\b(stop|cancel|halt|abort)\b[^]*?\bscan\b\s*#?\s*(\d+)|\b(stop|cancel|halt|abort)\s+#?(\d+)/i.exec(msg);
-    if (m) {
-      const id = parseInt(m[2] || m[4], 10);
+    // --- stop / cancel a scan (by number, host, the single active one, or "it") ---
+    if (/\b(stop|cancel|halt|abort|kill|terminate)\b/i.test(msg) && !/\bre-?scan\b/i.test(msg)) {
       if (role === "viewer") { aiPush("assistant", "⚠ Viewers can't control scans."); return true; }
+      let id = null;
+      let m = /\bscan\s*#?\s*(\d+)/i.exec(msg) || /\b(?:stop|cancel|halt|abort|kill|terminate)\s+#?(\d+)/i.exec(msg);
+      if (m) id = parseInt(m[1], 10);
+      let active = [];
+      if (!id) {
+        try { active = (await API.get("/api/scans")).filter((s) => s.status === "running" || s.status === "queued"); }
+        catch (e) { active = []; }
+        const host = aiExtractTarget(msg);
+        if (host) {
+          try {
+            const t = (await API.get("/api/targets")).find((x) => (x.address || "").toLowerCase().includes(host.toLowerCase()));
+            const s = t && active.find((x) => x.target_id === t.id);
+            if (s) id = s.id;
+          } catch (e) { /* ignore */ }
+        }
+        if (!id && _aiLastScanId && active.some((s) => s.id === _aiLastScanId)) id = _aiLastScanId;  // "cancel it"
+        if (!id && active.length === 1) id = active[0].id;                                            // only one running
+      }
+      if (!id) {
+        aiPush("assistant", active.length
+          ? `Which scan should I stop? Currently active: ${active.map((s) => "#" + s.id + " (" + s.scan_type + ")").join(", ")}. Say e.g. "stop scan ${active[0].id}".`
+          : "There are no running or queued scans to stop right now.");
+        return true;
+      }
       if (!confirm(`Stop scan #${id}?`)) { aiPush("assistant", "Okay, leaving it running."); return true; }
       try { await API.post(`/api/scans/${id}/cancel`); aiPush("assistant", `⏹ Stop requested for **scan #${id}** — it'll halt at the next safe point.`, [`scan#${id}`]); }
       catch (ex) { aiPush("assistant", "❌ " + (ex.message || ex)); }
       return true;
     }
     // --- rescan N ---
-    m = /\bre-?scan\b\s*#?\s*(\d+)/i.exec(msg);
+    let m = /\bre-?scan\b\s*#?\s*(\d+)/i.exec(msg);
     if (m) {
       const id = parseInt(m[1], 10);
       if (role === "viewer") { aiPush("assistant", "⚠ Viewers can't launch scans."); return true; }
@@ -601,6 +624,7 @@
     aiWatchScan(scan.id, target);
   }
   function aiWatchScan(id) {
+    _aiLastScanId = id;  // remember it so "cancel it" / "stop the scan" can resolve
     let tries = 0;
     const poll = async () => {
       tries++;
