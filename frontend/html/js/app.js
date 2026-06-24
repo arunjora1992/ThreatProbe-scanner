@@ -139,13 +139,16 @@
 
   // ---------- Offline AI assistant (floating chat widget) ----------
   const AI_HIST_KEY = "pt_ai_history";
-  const AI_WELCOME = "Hi! I'm your offline security assistant. Ask me to **explain a CVE** "
-    + "(e.g. CVE-2023-2975), summarise a **scan** ('scan #12'), check a **package**, or "
-    + "explain a vuln class like **XSS** or **SQLi**. I answer from this platform's local data.";
+  const AI_PLACEHOLDER = "Ask, or say 'scan 10.0.0.5 for open ports'…";
+  const AI_WELCOME = "Hi! I'm your offline security assistant. I can **launch scans** for you — "
+    + "just say e.g. *'run a port scan on 10.0.0.5'* and I'll walk you through it. I can also "
+    + "**explain a CVE** (CVE-2023-2975), **summarise a scan** ('scan #12'), check a **package**, "
+    + "or explain a vuln class like **XSS**/**SQLi**. I answer from this platform's local data.";
   let _aiHistory = (() => {
     try { return JSON.parse(localStorage.getItem(AI_HIST_KEY)) || []; } catch (e) { return []; }
   })();
   let _aiBuilt = false;
+  let _aiScan = null;  // transient scan-wizard state — NEVER persisted (holds in-memory creds)
   function buildAssistant() {
     if (_aiBuilt) return;
     const root = document.getElementById("ai-root");
@@ -163,7 +166,7 @@
         </div>
         <div id="ai-msgs" class="ai-msgs"></div>
         <div class="ai-input">
-          <input id="ai-text" placeholder="Ask about a CVE, scan #, package, or XSS/SQLi…" onkeydown="if(event.key==='Enter')ptAiSend()">
+          <input id="ai-text" placeholder="Ask, or say 'scan 10.0.0.5 for open ports'…" onkeydown="if(event.key==='Enter')ptAiSend()">
           <button class="btn btn-primary btn-sm" onclick="ptAiSend()">${icon("send")}</button>
         </div>
       </div>`;
@@ -252,10 +255,27 @@
   }
   window.ptAiSend = async () => {
     const input = document.getElementById("ai-text");
-    const msg = (input.value || "").trim();
+    const raw = input.value;
+    const msg = (raw || "").trim();
+
+    // ---- Scan wizard in progress: this input is a wizard answer (possibly secret) ----
+    if (_aiScan) {
+      const secret = !!_aiScan.secret;
+      if (!msg && !secret) return;
+      input.value = "";
+      aiRenderMsg("user", secret ? "•••••••• (hidden)" : msg);  // NOT persisted, never sent to model
+      aiResetInput();
+      aiWizardStep(secret ? raw : msg);
+      return;
+    }
     if (!msg) return;
     input.value = "";
     aiPush("user", msg);
+
+    // ---- Launch-scan intent → start the in-chat wizard (no model needed) ----
+    if (aiLaunchIntent(msg)) { aiStartScanWizard(msg); return; }
+
+    // ---- Normal grounded Q&A ----
     const box = document.getElementById("ai-msgs");
     box.insertAdjacentHTML("beforeend",
       `<div class="ai-msg ai-assistant" id="ai-typing"><div class="ai-bubble"><span class="live-dot"></span>thinking…</div></div>`);
@@ -272,6 +292,172 @@
       aiPush("assistant", "Error: " + (ex.message || ex));
     }
   };
+
+  // ---------- AI-driven scan launcher (in-chat wizard) ----------
+  const AI_SCAN_TYPES = ["discovery", "port", "full", "web", "zap_passive", "zap_active",
+                         "credentialed", "cis_benchmark", "custom"];
+  function aiResetInput() {
+    const i = document.getElementById("ai-text");
+    if (i) { i.type = "text"; i.placeholder = AI_PLACEHOLDER; }
+  }
+  function aiExtractTarget(m) {
+    let r = m.match(/https?:\/\/[^\s,]+/i); if (r) return r[0];
+    r = m.match(/\b\d{1,3}(?:\.\d{1,3}){3}(?:\/\d{1,2})?\b/); if (r) return r[0];
+    r = m.match(/\b(?:[a-z0-9-]+\.)+[a-z]{2,}\b/i); if (r) return r[0];
+    return null;
+  }
+  function aiParseScanType(m) {
+    const s = m.toLowerCase();
+    if (AI_SCAN_TYPES.includes(s.trim())) return s.trim();
+    if (/\bcis\b|hardening|benchmark/.test(s)) return "cis_benchmark";
+    if (/credential|ssh|package audit|authenticated linux|patch audit/.test(s)) return "credentialed";
+    if (/zap|owasp|web app/.test(s)) return /active|intrusive/.test(s) ? "zap_active" : "zap_passive";
+    if (/\bweb\b|url|http/.test(s)) return "web";
+    if (/discovery|ping|sweep|alive|host disc/.test(s)) return "discovery";
+    if (/\bport\b/.test(s)) return "port";
+    if (/full|server va|version detect|service detect|\bvuln\b|\bcve\b/.test(s)) return "full";
+    if (/custom|nmap flag/.test(s)) return "custom";
+    return null;
+  }
+  function aiLaunchIntent(m) {
+    const s = m.toLowerCase();
+    if (/\b(summar|result|explain|status|finding|report|what|which|how|list)\b/.test(s)) return false;
+    if (/\b(start|launch|run|begin|initiate|perform|kick off|new)\b[\s\S]*\bscan\b/.test(s)) return true;
+    return /\bscan\b/.test(s) && !!aiExtractTarget(m);
+  }
+  function aiStartScanWizard(msg) {
+    const role = (API.user() || {}).role;
+    if (role === "viewer") {
+      aiPush("assistant", "⚠ You're signed in as a **viewer** and can't launch scans. Ask an operator/admin.");
+      return;
+    }
+    _aiScan = { target: aiExtractTarget(msg) || "", scan_type: aiParseScanType(msg) || "", ssh_port: 22 };
+    aiWizardAdvance();
+  }
+  function aiWizardAsk(text) {
+    aiRenderMsg("assistant", text);
+    const input = document.getElementById("ai-text");
+    if (input) {
+      input.type = (_aiScan && _aiScan.secret) ? "password" : "text";
+      input.placeholder = (_aiScan && _aiScan.secret) ? "hidden — never stored or sent to the model" : "Type your answer…";
+      input.focus();
+    }
+  }
+  function aiWizardSummary() {
+    const s = _aiScan;
+    const L = ["**Ready to launch:**", `• Target: \`${s.target}\``, `• Scan type: **${s.scan_type}**`];
+    if (s.scan_type === "custom") L.push(`• nmap flags: \`${s.custom_flags}\``);
+    if (s.ssh_username) L.push(`• SSH: ${s.ssh_username}@${s.target}:${s.ssh_port} (${s.authMethod === "key" ? "private key" : "password"})`);
+    if (s.cis_level) L.push(`• CIS profile: ${s.cis_level}`);
+    return L.join("\n");
+  }
+  function aiWizardAdvance() {
+    const s = _aiScan;
+    s.secret = false;
+    if (!s.target) { s.step = "target"; return aiWizardAsk("🎯 What's the **target**? (IP, hostname, CIDR, or URL)"); }
+    if (!s.scan_type) { s.step = "type"; return aiWizardAsk("🔍 What **type of scan**?\ndiscovery · port · full (server VA) · web · zap_passive · zap_active · credentialed · cis_benchmark · custom"); }
+    if (s.scan_type === "custom" && !s.custom_flags) { s.step = "custom_flags"; return aiWizardAsk("⚙️ Enter the **custom nmap flags** (e.g. `-sT -sV -p 1-1000`)."); }
+    if (s.scan_type === "credentialed" || s.scan_type === "cis_benchmark") {
+      if (!s.ssh_username) { s.step = "ssh_user"; return aiWizardAsk("🔐 **SSH username**?"); }
+      if (!s.portAsked) { s.step = "ssh_port"; s.portAsked = true; return aiWizardAsk("🔌 **SSH port**? (type 22 for the default)"); }
+      if (!s.authMethod) { s.step = "auth_method"; return aiWizardAsk("🔑 Authenticate with a **password** or a **key**? (type `password` or `key`)"); }
+      if (s.authMethod === "password" && !s.ssh_password) { s.step = "ssh_password"; s.secret = true; return aiWizardAsk("🔒 Enter the **SSH password**. (hidden — used in-memory only, never stored)"); }
+      if (s.authMethod === "key" && !s.ssh_key) { s.step = "ssh_key"; s.secret = true; return aiWizardAsk("🔒 Paste the **private key** (PEM). (hidden — used in-memory only, never stored)"); }
+      if (s.scan_type === "cis_benchmark" && !s.cisAsked) { s.step = "cis_level"; s.cisAsked = true; return aiWizardAsk("🛡 CIS **level**?  1) L1 Server (default)  2) L2 Server  3) L1 Workstation  4) L2 Workstation — type 1-4."); }
+    }
+    s.step = "confirm";
+    aiWizardAsk(aiWizardSummary() + "\n\n**Launch this scan?** (yes / no)");
+  }
+  function aiWizardStep(value) {
+    const s = _aiScan;
+    const v = (value || "").trim();
+    if (!s.secret && /^(cancel|stop|quit|abort|nevermind)$/i.test(v)) {
+      aiRenderMsg("assistant", "Okay — cancelled, no scan started."); _aiScan = null; aiResetInput(); return;
+    }
+    switch (s.step) {
+      case "target": s.target = aiExtractTarget(v) || v; break;
+      case "type": {
+        const t = aiParseScanType(v);
+        if (!t) return aiWizardAsk("I didn't recognise that. Try: discovery, port, full, web, zap_passive, zap_active, credentialed, cis_benchmark, custom.");
+        s.scan_type = t; break;
+      }
+      case "custom_flags": if (!v) return aiWizardAsk("Please enter nmap flags."); s.custom_flags = v; break;
+      case "ssh_user": if (!v) return aiWizardAsk("Username can't be empty."); s.ssh_username = v; break;
+      case "ssh_port": s.ssh_port = parseInt(v, 10) || 22; break;
+      case "auth_method": {
+        const a = v.toLowerCase();
+        if (/^pass|pwd/.test(a)) s.authMethod = "password";
+        else if (/key|pem/.test(a)) s.authMethod = "key";
+        else return aiWizardAsk("Type `password` or `key`.");
+        break;
+      }
+      case "ssh_password": if (!value) return aiWizardAsk("Password can't be empty."); s.ssh_password = value; break;
+      case "ssh_key": if (!value) return aiWizardAsk("Key can't be empty."); s.ssh_key = value; break;
+      case "cis_level": {
+        s.cis_level = ({ "1": "_cis_server_l1", "2": "_cis", "3": "_cis_workstation_l1", "4": "_cis_workstation_l2" })[v.trim()] || "_cis_server_l1";
+        break;
+      }
+      case "confirm": {
+        const a = v.toLowerCase();
+        if (/^y/.test(a)) return aiWizardLaunch();
+        if (/^n/.test(a)) { aiRenderMsg("assistant", "Okay — cancelled, no scan started."); _aiScan = null; return; }
+        return aiWizardAsk("Please answer **yes** or **no**.");
+      }
+    }
+    aiWizardAdvance();
+  }
+  async function aiWizardLaunch() {
+    const s = _aiScan;
+    aiRenderMsg("assistant", "⏳ Launching… resolving target.");
+    let t;
+    try {
+      const targets = await API.get("/api/targets");
+      t = targets.find((x) => (x.address || "").toLowerCase() === s.target.toLowerCase());
+      if (!t) t = await API.post("/api/targets", { name: s.target, address: s.target, tags: "ai", description: "Created by AI assistant" });
+    } catch (ex) { aiPush("assistant", "❌ Couldn't resolve/create the target: " + ex.message); _aiScan = null; aiResetInput(); return; }
+    const body = { target_id: t.id, scan_type: s.scan_type };
+    if (s.scan_type === "custom") body.custom_flags = s.custom_flags;
+    if (s.scan_type === "credentialed" || s.scan_type === "cis_benchmark") {
+      body.ssh_username = s.ssh_username; body.ssh_port = s.ssh_port || 22;
+      if (s.ssh_password) body.ssh_password = s.ssh_password;
+      if (s.ssh_key) body.ssh_key = s.ssh_key;
+      if (s.scan_type === "cis_benchmark") body.cis_profile = s.cis_level || "_cis_server_l1";
+    }
+    const target = s.target;
+    _aiScan = null;  // drop in-memory credentials immediately after building the request
+    aiResetInput();
+    let scan;
+    try { scan = await API.post("/api/scans", body); }
+    catch (ex) { aiPush("assistant", "❌ Scan rejected: " + (ex.message || ex)); return; }
+    aiPush("assistant", `✅ **Scan #${scan.id}** (${body.scan_type}) started on \`${target}\`. I'll report back when it finishes — you can keep chatting meanwhile.`, [`scan#${scan.id}`]);
+    aiWatchScan(scan.id, target);
+  }
+  function aiWatchScan(id) {
+    let tries = 0;
+    const poll = async () => {
+      tries++;
+      let sc;
+      try { sc = await API.get(`/api/scans/${id}`); }
+      catch (e) { if (tries < 120) setTimeout(poll, 6000); return; }
+      if (["completed", "failed", "cancelled"].includes(sc.status)) return aiReportScan(id, sc);
+      if (tries >= 200) { aiPush("assistant", `⏱ Scan #${id} is still running. Ask me "summarise scan #${id}" later.`, [`scan#${id}`]); return; }
+      setTimeout(poll, 6000);
+    };
+    setTimeout(poll, 6000);
+  }
+  async function aiReportScan(id, sc) {
+    if (sc.status !== "completed") {
+      aiPush("assistant", `Scan #${id} **${sc.status}**.` + (sc.error ? ` ${sc.error}` : ""), [`scan#${id}`]);
+      return;
+    }
+    try {
+      const r = await API.post("/api/assistant/chat", { message: `Summarise scan #${id}` });
+      aiPush("assistant", `✅ **Scan #${id} complete.**\n\n` + (r.reply || ""),
+        (r.citations && r.citations.length) ? r.citations : [`scan#${id}`]);
+    } catch (ex) {
+      aiPush("assistant", `✅ Scan #${id} complete (${sc.result_count || 0} results). Open it for full details.`, [`scan#${id}`]);
+    }
+  }
   function showLogin() {
     stopPolling();
     document.getElementById("app-view").classList.add("hidden");
@@ -636,8 +822,8 @@
     view.innerHTML = pageHead("scans", "Scans",
       `<span class="muted small">⟳ Auto-refreshing</span>`) + `
       <div class="table-wrap"><table>
-      <thead><tr><th>Scan</th><th>Target</th><th>Type</th><th>Status</th><th>By</th><th>Created</th><th></th></tr></thead>
-      <tbody id="scans-tbody"><tr><td colspan="7">${loading()}</td></tr></tbody></table></div>`;
+      <thead><tr><th>Scan</th><th>Target</th><th>Type</th><th>Status</th><th>Results</th><th>By</th><th>Created</th><th></th></tr></thead>
+      <tbody id="scans-tbody"><tr><td colspan="8">${loading()}</td></tr></tbody></table></div>`;
     await refreshScans();
     pollTimer = setInterval(refreshScans, 5000);
   }
@@ -655,6 +841,8 @@
           <td><b>${esc(t.name || "?")}</b><br><span class="muted small mono">${esc(t.address || "")}</span></td>
           <td>${esc(s.scan_type)}</td>
           <td>${statusBadge(s.status)}${prog}</td>
+          <td>${s.status === "completed" || (s.result_count || 0) > 0
+                ? `<b>${s.result_count || 0}</b>` : '<span class="muted">—</span>'}</td>
           <td>${esc(s.created_by)}</td>
           <td>${fmtDate(s.created_at)}</td>
           <td onclick="event.stopPropagation()" class="pill-row">
@@ -662,9 +850,9 @@
             ${(s.status === "running" || s.status === "queued") ? `<button class="btn btn-sm" onclick="ptCancelScan(${s.id})">⏹ Stop</button>` : ""}
             <button class="btn btn-sm btn-danger" onclick="ptDelScan(${s.id})">Del</button>
           </td></tr>`;
-      }).join("") || `<tr><td colspan="7" class="empty">No scans yet. Launch one from Targets.</td></tr>`;
+      }).join("") || `<tr><td colspan="8" class="empty">No scans yet. Launch one from Targets.</td></tr>`;
       tbody.innerHTML = rows;
-    } catch (ex) { stopPolling(); tbody.innerHTML = `<tr><td colspan="7">${errBox(ex)}</td></tr>`; }
+    } catch (ex) { stopPolling(); tbody.innerHTML = `<tr><td colspan="8">${errBox(ex)}</td></tr>`; }
   }
   window.ptDelScan = async (id) => {
     if (!confirm("Delete scan #" + id + "?")) return;

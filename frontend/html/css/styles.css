@@ -362,11 +362,17 @@ input:focus, select:focus, textarea:focus, .login-card input:focus { box-shadow:
   box-shadow: var(--shadow-lg); display: flex; flex-direction: column; overflow: hidden;
   animation: fadeIn .18s ease;
 }
-.ai-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px;
-  border-bottom: 1px solid var(--border); background-image: var(--grad-soft); }
-.ai-title { display: flex; align-items: center; gap: 7px; font-size: 14px; }
-.ai-title svg { width: 18px; height: 18px; color: var(--primary); }
-.ai-status { font-size: 11px; font-weight: 600; }
+.ai-head { display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 10px 12px; border-bottom: 1px solid var(--border); background-image: var(--grad-soft); }
+.ai-title { display: flex; align-items: center; gap: 7px; font-size: 14px; min-width: 0; }
+.ai-title svg { width: 18px; height: 18px; color: var(--primary); flex: none; }
+.ai-title b { white-space: nowrap; }
+.ai-status { font-size: 10px; font-weight: 600; white-space: nowrap; }
+/* Header controls: keep Clear / Disable / × on one tidy, vertically-centered row. */
+.ai-head .pill-row { align-items: center; gap: 6px; flex-wrap: nowrap; flex: none; }
+.ai-head .btn-sm { padding: 4px 9px; line-height: 1.3; }
+.ai-head .modal-close { font-size: 20px; line-height: 1; padding: 0 2px; display: grid; place-items: center; }
+.ai-head .modal-close svg { width: 18px; height: 18px; }
 .ai-msgs { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
 .ai-msg { display: flex; }
 .ai-msg.ai-user { justify-content: flex-end; }

@@ -25,6 +25,23 @@ VALID_TYPES = {"discovery", "port", "full", "web", "custom", "credentialed",
 _SEV_RANK = {"INFO": 0, "NONE": 0, "UNKNOWN": 0, "LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
 
 
+def _result_counts(db, scan_ids):
+    """Per-scan result count across all scan types: CVE findings + web findings +
+    failed CIS controls. Batched (group-by) so listing many scans stays cheap."""
+    from sqlalchemy import func
+    if not scan_ids:
+        return {}
+    out = {sid: 0 for sid in scan_ids}
+    for model, extra in ((Finding, None), (WebFinding, None),
+                         (ConfigFinding, ConfigFinding.status == "fail")):
+        query = db.query(model.scan_id, func.count()).filter(model.scan_id.in_(scan_ids))
+        if extra is not None:
+            query = query.filter(extra)
+        for sid, n in query.group_by(model.scan_id).all():
+            out[sid] = out.get(sid, 0) + n
+    return out
+
+
 def _host_of(address: str) -> str:
     """Bare host from an address/URL (drop scheme, path, port, CIDR suffix)."""
     import re
@@ -70,7 +87,11 @@ def list_scans(target_id: int | None = None, db: Session = Depends(get_db),
     q = db.query(Scan)
     if target_id is not None:
         q = q.filter(Scan.target_id == target_id)
-    return q.order_by(Scan.created_at.desc()).all()
+    scans = q.order_by(Scan.created_at.desc()).all()
+    counts = _result_counts(db, [s.id for s in scans])
+    for s in scans:
+        s.result_count = counts.get(s.id, 0)
+    return scans
 
 
 @router.post("", response_model=ScanOut, status_code=201)

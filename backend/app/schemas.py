@@ -92,6 +92,7 @@ class ScanOut(BaseModel):
     created_at: datetime
     started_at: Optional[datetime]
     finished_at: Optional[datetime]
+    result_count: int = 0  # CVE + web findings + failed CIS controls (per scan type)
 
 
 class ServiceOut(BaseModel):

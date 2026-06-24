@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from ..auth import get_current_user
 from ..database import get_db
-from ..models import CVE, Finding, Host, Scan, Service, Target, User, WebFinding
+from ..models import CVE, ConfigFinding, Finding, Host, Scan, Service, Target, User, WebFinding
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
@@ -35,7 +35,9 @@ def stats(db: Session = Depends(get_db), _: User = Depends(get_current_user)):
             "status": s.status, "progress": s.progress,
             "created_at": s.created_at.isoformat() if s.created_at else None,
             "finding_count": db.query(Finding).filter(Finding.scan_id == s.id).count()
-            + db.query(WebFinding).filter(WebFinding.scan_id == s.id).count(),
+            + db.query(WebFinding).filter(WebFinding.scan_id == s.id).count()
+            + db.query(ConfigFinding).filter(ConfigFinding.scan_id == s.id,
+                                             ConfigFinding.status == "fail").count(),
         }
         for s in recent
     ]
