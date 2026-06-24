@@ -45,6 +45,23 @@ def _find_one(directory: str, patterns) -> Optional[str]:
     return None
 
 
+def _save(directory: str, filename: str, data: bytes) -> Optional[str]:
+    """Persist a downloaded feed into the (host-mounted, persistent) feed dir.
+
+    Lets a connected host produce the exact files an air-gapped host needs: copy
+    the feed dir across and re-import offline. Best-effort — a write failure must
+    not abort the in-memory import that just succeeded.
+    """
+    try:
+        os.makedirs(directory, exist_ok=True)
+        path = os.path.join(directory, filename)
+        with open(path, "wb") as fh:
+            fh.write(data)
+        return path
+    except OSError:
+        return None
+
+
 def _parse_kev_date(value: str) -> Optional[datetime]:
     for fmt in ("%Y-%m-%d", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%SZ"):
         try:
@@ -126,7 +143,11 @@ def import_threat_intel(db: Session, directory: Optional[str] = None,
         if online:
             req = urllib.request.Request(KEV_URL, headers={"User-Agent": "ThreatProbe"})
             with urllib.request.urlopen(req, timeout=120) as r:
-                kev_updated = import_kev_data(db, json.load(r))
+                raw = r.read()
+            # Save into the persistent feed dir so this file can be copied to an
+            # air-gapped host and re-imported there (offline) without re-downloading.
+            _save(directory, "known_exploited_vulnerabilities.json", raw)
+            kev_updated = import_kev_data(db, json.loads(raw.decode("utf-8", errors="replace")))
         else:
             path = _find_one(directory, _KEV_GLOBS)
             if path:
@@ -144,7 +165,10 @@ def import_threat_intel(db: Session, directory: Optional[str] = None,
         if online:
             req = urllib.request.Request(EPSS_URL, headers={"User-Agent": "ThreatProbe"})
             with urllib.request.urlopen(req, timeout=180) as r:
-                raw = gzip.decompress(r.read()).decode("utf-8", errors="replace")
+                gz = r.read()
+            # Persist the raw .gz for air-gap transfer, then decompress for this import.
+            _save(directory, "epss_scores-current.csv.gz", gz)
+            raw = gzip.decompress(gz).decode("utf-8", errors="replace")
             epss_updated = import_epss_rows(db, csv.reader(io.StringIO(raw)))
         else:
             path = _find_one(directory, _EPSS_GLOBS)

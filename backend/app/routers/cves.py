@@ -81,11 +81,12 @@ def import_threat_intel_feeds(online: bool = False, db: Session = Depends(get_db
 
 
 @router.post("/distro-feeds/import")
-def import_distro_feeds_endpoint(db: Session = Depends(get_db),
+def import_distro_feeds_endpoint(online: bool = False, db: Session = Depends(get_db),
                                  _: User = Depends(require_admin)):
     """Import vendor security advisories (OVAL / Debian tracker JSON) for backport-aware
-    package matching. Drop feeds in <feed_dir>/distro_feeds and call this."""
-    return distro_feeds.import_distro_feeds(db)
+    package matching. Drop feeds in <feed_dir>/distro_feeds and call this, or pass
+    ?online=true on a connected host to download the curated vendor feeds first."""
+    return distro_feeds.import_distro_feeds(db, online=online)
 
 
 @router.get("/distro-feeds/status")

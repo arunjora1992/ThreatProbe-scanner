@@ -21,6 +21,7 @@ import json
 import lzma
 import os
 import re
+import urllib.request
 import xml.etree.ElementTree as ET
 from typing import Dict, List, Optional, Tuple
 
@@ -41,6 +42,50 @@ _OS_ID_MAP = {
 
 # RHEL-family clones resolve to Red Hat advisory data when their own isn't loaded.
 _RHEL_FAMILY = {"rhel", "centos", "rocky", "alma", "oracle"}
+
+# Curated vendor advisory feeds for the online fetch (connected hosts only). One Red Hat
+# OVAL covers RHEL + its clones (CentOS/Rocky/Alma) via the fall-back in has_advisories().
+# Best-effort: unreachable URLs are skipped and logged, the rest still import. The files
+# land in <feed_dir>/distro_feeds so they can be copied to an air-gapped host and
+# re-imported there offline.
+_FEED_URLS = [
+    # Red Hat Enterprise Linux (covers CentOS/Rocky/Alma clones too)
+    "https://security.access.redhat.com/data/oval/v2/RHEL8/rhel-8.oval.xml.bz2",
+    "https://security.access.redhat.com/data/oval/v2/RHEL9/rhel-9.oval.xml.bz2",
+    # Oracle Linux (ELSA) — recent years
+    "https://linux.oracle.com/security/oval/com.oracle.elsa-2024.xml.bz2",
+    "https://linux.oracle.com/security/oval/com.oracle.elsa-2025.xml.bz2",
+    # Ubuntu — current LTS releases
+    "https://security-metadata.canonical.com/oval/com.ubuntu.focal.cve.oval.xml.bz2",
+    "https://security-metadata.canonical.com/oval/com.ubuntu.jammy.cve.oval.xml.bz2",
+    "https://security-metadata.canonical.com/oval/com.ubuntu.noble.cve.oval.xml.bz2",
+]
+
+
+def download_feeds(directory: str, log=lambda m: None) -> dict:
+    """Download the curated vendor OVAL feeds into <directory> (connected hosts only).
+
+    Returns {"saved": n, "failed": [...], "files": [...]}. Best-effort: a feed that
+    can't be fetched is skipped so the others still succeed.
+    """
+    os.makedirs(directory, exist_ok=True)
+    saved, failed, files = 0, [], []
+    for url in _FEED_URLS:
+        name = url.rsplit("/", 1)[-1]
+        dest = os.path.join(directory, name)
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "ThreatProbe"})
+            with urllib.request.urlopen(req, timeout=180) as r:
+                data = r.read()
+            with open(dest, "wb") as fh:
+                fh.write(data)
+            saved += 1
+            files.append(name)
+            log(f"downloaded {name} ({len(data) // 1024} KiB)")
+        except Exception as exc:  # noqa: BLE001 - one unreachable mirror shouldn't abort the rest
+            failed.append(name)
+            log(f"skipped {name}: {exc}")
+    return {"saved": saved, "failed": failed, "files": files}
 
 
 def distro_key(os_id: str) -> Tuple[str, str]:
@@ -283,13 +328,22 @@ def _upsert(db: Session, rows: List[dict]) -> int:
     return n
 
 
-def import_distro_feeds(db: Session, directory: Optional[str] = None) -> dict:
-    """Import every OVAL/Debian-JSON advisory feed found under <feed_dir>/distro_feeds."""
+def import_distro_feeds(db: Session, directory: Optional[str] = None,
+                        online: bool = False) -> dict:
+    """Import every OVAL/Debian-JSON advisory feed found under <feed_dir>/distro_feeds.
+
+    When online=True (connected hosts only), first download the curated vendor feeds into
+    the directory, then import. The downloaded files persist for air-gap transfer.
+    """
     directory = directory or os.path.join(settings.cve_feed_dir, "distro_feeds")
+    dl = None
+    if online:
+        dl = download_feeds(directory)
     if not os.path.isdir(directory):
         return {"imported": 0, "files": 0,
                 "message": f"No distro-feed directory at {directory}. Create it and drop "
-                           "vendor OVAL (.xml/.bz2) or the Debian tracker JSON there."}
+                           "vendor OVAL (.xml/.bz2) or the Debian tracker JSON there, or "
+                           "use the online fetch on a connected host."}
     patterns = ["*.oval.xml", "*.xml", "*.xml.bz2", "*.xml.gz", "*.xml.xz",
                 "*.json", "*.json.gz", "*.json.bz2"]
     paths = sorted({p for pat in patterns for p in glob.glob(os.path.join(directory, pat))})
@@ -307,10 +361,16 @@ def import_distro_feeds(db: Session, directory: Optional[str] = None) -> dict:
         for r in rows:
             by_distro[r["distro"]] = by_distro.get(r["distro"], 0) + 1
     summary = ", ".join(f"{k}:{v}" for k, v in sorted(by_distro.items()))
-    return {"imported": total, "files": files,
-            "message": (f"Imported {total} advisory rows from {files} feed file(s) "
+    prefix = ""
+    if dl is not None:
+        prefix = f"Downloaded {dl['saved']} feed(s)"
+        if dl["failed"]:
+            prefix += f" ({len(dl['failed'])} unreachable: {', '.join(dl['failed'])})"
+        prefix += ". "
+    return {"imported": total, "files": files, "downloaded": (dl or {}).get("saved", 0),
+            "message": (f"{prefix}Imported {total} advisory rows from {files} feed file(s) "
                         f"({summary})." if files else
-                        f"No advisory feeds found in {directory}.")}
+                        f"{prefix}No advisory feeds found in {directory}.")}
 
 
 def has_advisories(db: Session, distro: str) -> bool:

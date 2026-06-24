@@ -1026,7 +1026,18 @@
   window.ptImportDistroFeeds = async () => {
     toast("Importing distro security advisories from /data/cve_feeds/distro_feeds …");
     try {
-      const r = await API.post("/api/cves/distro-feeds/import");
+      let r = await API.post("/api/cves/distro-feeds/import");
+      // If no local feed files were present, offer to download them online.
+      if ((r.files || 0) === 0) {
+        if (confirm("No distro advisory feeds found in /data/cve_feeds/distro_feeds.\n\n"
+            + "Download the vendor OVAL feeds online now? (RHEL 8/9, Oracle Linux, "
+            + "Ubuntu LTS — needs internet, use only on a connected host.)\n\n"
+            + "The downloaded files are saved to data/cve_feeds/distro_feeds/ so you can "
+            + "copy that folder to an air-gapped host and import there offline.")) {
+          toast("Downloading vendor OVAL feeds online… (large, give it a minute)");
+          r = await API.post("/api/cves/distro-feeds/import?online=true");
+        }
+      }
       toast(r.message || "Distro feeds imported");
     } catch (ex) { toast(ex.message, "err"); }
   };

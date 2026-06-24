@@ -28,6 +28,13 @@ services:
       # backend talks to the ZAP daemon directly too.
       ZAP_API_URL: http://zap:8090
     volumes:
+      # Persistent host bind mount for ALL feed data — survives container rebuilds/recreates:
+      #   /data/cve_feeds/*.json[.gz]              NVD CVE feeds + CVE-DB exports/uploads
+      #   /data/cve_feeds/known_exploited_*.json   CISA KEV
+      #   /data/cve_feeds/epss_scores-current.*    FIRST EPSS
+      #   /data/cve_feeds/distro_feeds/*           vendor OVAL (RHEL/Oracle/Ubuntu …)
+      # Online "Import" buttons also WRITE the downloaded files here, so a connected host
+      # can produce exactly the files an air-gapped host needs (copy ./data across).
       - ./data:/data
       # Share the host server's /etc/hosts (read-only) so scan targets named there
       # resolve inside the container. Inter-service names (db, zap) resolve via Docker's
