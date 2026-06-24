@@ -455,12 +455,27 @@ def _answer_fixplan(db: Session, message: str) -> dict:
     return {"reply": "\n".join(lines), "citations": cites, "grounded": True, "model": False}
 
 
-def _scan_keys(db: Session, scan) -> dict:
-    """Map of finding-key -> label, for diffing two scans."""
+def _scan_domain(scan) -> str:
+    """Finding domain — only scans in the SAME domain are comparable."""
     if scan.scan_type == "cis_benchmark":
+        return "cis"
+    if scan.scan_type in ("web", "zap_passive", "zap_active"):
+        return "web"
+    return "cve"
+
+
+def _scan_keys(db: Session, scan) -> dict:
+    """Map of finding-key -> label, for diffing two scans of the SAME domain."""
+    dom = _scan_domain(scan)
+    if dom == "cis":
         rows = db.query(ConfigFinding).filter(ConfigFinding.scan_id == scan.id,
                                               ConfigFinding.status == "fail").all()
-        return {("cis", c.check_id): f"[{c.severity}] {c.title or c.check_id}" for c in rows}
+        return {c.check_id: f"[{c.severity}] {c.title or c.check_id}" for c in rows}
+    if dom == "web":
+        out = {}
+        for w in db.query(WebFinding).filter(WebFinding.scan_id == scan.id).all():
+            out[(w.name, w.target_url or "")] = f"{w.name} [{w.category}] ({w.severity})"
+        return out
     out = {}
     for f in db.query(Finding).filter(Finding.scan_id == scan.id).all():
         svc = f.service
@@ -470,7 +485,9 @@ def _scan_keys(db: Session, scan) -> dict:
 
 
 def _answer_diff(db: Session, message: str):
-    """Compare two scans: two explicit ids, or the last two scans for a target."""
+    """Compare two scans of the SAME type/domain: two explicit ids, or the last two
+    same-type scans for a target. Refuses to diff incomparable types (e.g. a CVE/package
+    scan vs. a CIS benchmark) — that would mislabel every finding as new/resolved."""
     nums = [int(n) for n in re.findall(r"(?<![\d.\-])(\d{1,6})(?![\d.\-])", message)
             if not CVE_RE.search(message)]
     a = b = None
@@ -485,11 +502,25 @@ def _answer_diff(db: Session, message: str):
             t = s1.target if s1 else None
         if t:
             recent = (db.query(Scan).filter(Scan.target_id == t.id, Scan.status == "completed")
-                      .order_by(Scan.created_at.desc()).limit(2).all())
-            if len(recent) >= 2:
-                b, a = recent[0], recent[1]  # newest=b, previous=a
+                      .order_by(Scan.created_at.desc()).limit(15).all())
+            if recent:
+                newest = recent[0]
+                prev = next((s for s in recent[1:] if _scan_domain(s) == _scan_domain(newest)), None)
+                if prev:
+                    b, a = newest, prev  # newest=b, previous same-type=a
+                else:
+                    return {"reply": f"There's only one completed **{newest.scan_type}** scan on "
+                                     f"{t.address} (#{newest.id}), so there's nothing of the same "
+                                     f"type to compare it against yet.", "citations": [f"scan#{newest.id}"],
+                            "grounded": True, "model": False}
     if not a or not b:
         return None
+    if _scan_domain(a) != _scan_domain(b):
+        return {"reply": f"Scan #{a.id} is a **{a.scan_type}** scan and #{b.id} is a "
+                         f"**{b.scan_type}** scan — different scan types can't be meaningfully "
+                         f"compared (their findings aren't the same kind). Pick two scans of the "
+                         f"same type.", "citations": [f"scan#{a.id}", f"scan#{b.id}"],
+                "grounded": True, "model": False}
     ak, bk = _scan_keys(db, a), _scan_keys(db, b)
     new = [bk[k] for k in bk if k not in ak]
     fixed = [ak[k] for k in ak if k not in bk]

@@ -415,6 +415,35 @@
   // Stop / rescan / schedule a scan straight from chat (role-gated; reuses scan APIs).
   async function aiTryAction(msg) {
     const role = (API.user() || {}).role;
+
+    // --- watch: "let me know when scan N completes" → poll any scan + post result on done ---
+    const wantWatch = /(let me know|notify me|tell me|ping me|alert me|keep me posted|watch|monitor|update me)/i.test(msg)
+      || /\b(once|when|after|as soon as)\b[\s\S]*\b(complet|finish|done|ready)\b/i.test(msg);
+    if (wantWatch) {
+      let id = null;
+      let m = /\bscan\s*#?\s*(\d+)/i.exec(msg);
+      if (m) id = parseInt(m[1], 10);
+      else if (!/CVE-\d/i.test(msg)) { const n = /(?<![\d.])(\d{1,6})(?![\d.])/.exec(msg); if (n) id = parseInt(n[1], 10); }
+      if (!id) {  // try a target host → its latest scan
+        const host = aiExtractTarget(msg);
+        if (host) {
+          try {
+            const [scans, targets] = await Promise.all([API.get("/api/scans"), API.get("/api/targets")]);
+            const t = targets.find((x) => (x.address || "").toLowerCase().includes(host.toLowerCase()));
+            const s = t && scans.find((x) => x.target_id === t.id);
+            if (s) id = s.id;
+          } catch (e) { /* fall through */ }
+        }
+      }
+      if (!id) return false;  // no scan referenced — let normal Q&A handle it
+      try {
+        const sc = await API.get(`/api/scans/${id}`);
+        if (["completed", "failed", "cancelled"].includes(sc.status)) { aiReportScan(id, sc); return true; }
+        aiPush("assistant", `👍 I'll keep watching **scan #${id}** and post the results here as soon as it finishes (status: ${sc.status}${sc.status === "running" ? ` ${sc.progress}%` : ""}).`, [`scan#${id}`]);
+        aiWatchScan(id);
+      } catch (ex) { aiPush("assistant", `I couldn't find scan #${id}.`); }
+      return true;
+    }
     // --- stop / cancel scan N ---
     let m = /\b(stop|cancel|halt|abort)\b[^]*?\bscan\b\s*#?\s*(\d+)|\b(stop|cancel|halt|abort)\s+#?(\d+)/i.exec(msg);
     if (m) {
