@@ -138,7 +138,13 @@
   }
 
   // ---------- Offline AI assistant (floating chat widget) ----------
-  let _aiHistory = [];
+  const AI_HIST_KEY = "pt_ai_history";
+  const AI_WELCOME = "Hi! I'm your offline security assistant. Ask me to **explain a CVE** "
+    + "(e.g. CVE-2023-2975), summarise a **scan** ('scan #12'), check a **package**, or "
+    + "explain a vuln class like **XSS** or **SQLi**. I answer from this platform's local data.";
+  let _aiHistory = (() => {
+    try { return JSON.parse(localStorage.getItem(AI_HIST_KEY)) || []; } catch (e) { return []; }
+  })();
   let _aiBuilt = false;
   function buildAssistant() {
     if (_aiBuilt) return;
@@ -150,6 +156,7 @@
         <div class="ai-head">
           <span class="ai-title">${icon("assistant")} <b>Security Assistant</b> <span id="ai-status" class="ai-status">·</span></span>
           <span class="pill-row">
+            <button class="btn btn-sm btn-ghost" onclick="ptAiClear()" title="Clear chat history">Clear</button>
             <button class="btn btn-sm btn-ghost admin-only" onclick="ptAiDisable()" title="Disable the assistant (admins; re-enable in Settings → AI Assistant)">Disable</button>
             <button class="modal-close" onclick="ptAiToggle()" style="font-size:20px">${icon("close")}</button>
           </span>
@@ -164,14 +171,22 @@
     // Re-apply admin-only visibility to the freshly-built Disable button.
     const isAdmin = (API.user() || {}).role === "admin";
     root.querySelectorAll(".admin-only").forEach((el) => { el.style.display = isAdmin ? "" : "none"; });
-    if (!_aiHistory.length) {
-      aiPush("assistant", "Hi! I'm your offline security assistant. Ask me to **explain a CVE** "
-        + "(e.g. CVE-2023-2975), summarise a **scan** ('scan #12'), check a **package**, or "
-        + "explain a vuln class like **XSS** or **SQLi**. I answer from this platform's local data.");
+    // Restore prior conversation (persisted in localStorage); else show the welcome.
+    if (_aiHistory.length) {
+      _aiHistory.forEach((m) => aiRenderMsg(m.role, m.content, m.citations));
+    } else {
+      aiRenderMsg("assistant", AI_WELCOME);
     }
     applyAssistantEnabled();
     refreshAiStatus();
   }
+  window.ptAiClear = () => {
+    _aiHistory = [];
+    try { localStorage.removeItem(AI_HIST_KEY); } catch (e) { /* ignore */ }
+    const box = document.getElementById("ai-msgs");
+    if (box) box.innerHTML = "";
+    aiRenderMsg("assistant", AI_WELCOME);
+  };
   // Show/hide the whole widget based on the assistant_enabled setting.
   function applyAssistantEnabled() {
     const root = document.getElementById("ai-root");
@@ -221,8 +236,7 @@
     s = s.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>").replace(/`([^`]+)`/g, "<code>$1</code>");
     return s.replace(/\n/g, "<br>");
   }
-  function aiPush(role, text, citations) {
-    _aiHistory.push({ role, content: text });
+  function aiRenderMsg(role, text, citations) {
     const box = document.getElementById("ai-msgs");
     if (!box) return;
     const cites = (citations && citations.length)
@@ -230,6 +244,11 @@
     box.insertAdjacentHTML("beforeend",
       `<div class="ai-msg ai-${role}"><div class="ai-bubble">${aiFormat(text)}${cites}</div></div>`);
     box.scrollTop = box.scrollHeight;
+  }
+  function aiPush(role, text, citations) {
+    _aiHistory.push({ role, content: text, citations: citations || [] });
+    try { localStorage.setItem(AI_HIST_KEY, JSON.stringify(_aiHistory.slice(-50))); } catch (e) { /* quota */ }
+    aiRenderMsg(role, text, citations);
   }
   window.ptAiSend = async () => {
     const input = document.getElementById("ai-text");
@@ -1691,10 +1710,21 @@
   }
 
   // ---------- branding (white-label app name + logo) ----------
+  // Modern default mark: a gradient shield (no flat emoji / white box). Used when no
+  // custom logo image is uploaded and the emoji is the default.
+  const BRAND_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">'
+    + '<defs><linearGradient id="tpg" x1="0" y1="0" x2="1" y2="1">'
+    + '<stop offset="0" stop-color="#6366f1"/><stop offset=".5" stop-color="#8b5cf6"/>'
+    + '<stop offset="1" stop-color="#d946ef"/></linearGradient></defs>'
+    + '<path d="M32 3 7 12v17c0 15.5 10.4 24 25 30 14.6-6 25-14.5 25-30V12z" fill="url(#tpg)"/>'
+    + '<path d="M21 32.5l7.5 7.5L44 24" fill="none" stroke="#fff" stroke-width="5.5" '
+    + 'stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const BRAND_URI = "data:image/svg+xml," + encodeURIComponent(BRAND_SVG);
   function _logoHtml(b, size) {
-    return b.logo_data_url
-      ? `<img src="${esc(b.logo_data_url)}" alt="logo" style="height:${size}px;width:auto;vertical-align:middle">`
-      : esc(b.logo_emoji || "🛡️");
+    if (b.logo_data_url)
+      return `<img src="${esc(b.logo_data_url)}" alt="logo" style="height:${size}px;width:auto;vertical-align:middle;border-radius:8px">`;
+    if (b.logo_emoji && b.logo_emoji !== "🛡️") return esc(b.logo_emoji);
+    return `<img src="${BRAND_URI}" alt="logo" style="height:${size}px;width:auto;vertical-align:middle">`;
   }
   async function applyBranding() {
     try {
@@ -1705,13 +1735,13 @@
       const ll = document.getElementById("login-logo"); if (ll) ll.innerHTML = _logoHtml(b, 56);
       const br = document.getElementById("brand");
       if (br) br.innerHTML = `${_logoHtml(b, 24)} <span>${esc(name)}</span>`;
-      // Favicon (uploaded image, else fall back to the logo image if it's a raster/SVG).
-      const favUrl = b.favicon_data_url || (b.logo_data_url || "");
-      if (favUrl) {
-        let link = document.querySelector("link[rel='icon']");
-        if (!link) { link = document.createElement("link"); link.rel = "icon"; document.head.appendChild(link); }
-        link.href = favUrl;
-      }
+      // Favicon: custom favicon, else the uploaded logo, else the modern default shield —
+      // so the browser tab always shows a crisp icon (never blank).
+      const favUrl = b.favicon_data_url || b.logo_data_url || BRAND_URI;
+      let link = document.querySelector("link[rel='icon']");
+      if (!link) { link = document.createElement("link"); link.rel = "icon"; document.head.appendChild(link); }
+      link.type = favUrl.includes("svg") ? "image/svg+xml" : "image/png";
+      link.href = favUrl;
       window._branding = b;
     } catch { /* keep static defaults if branding can't load */ }
   }
