@@ -213,10 +213,12 @@
   // ---------- Offline AI assistant (floating chat widget) ----------
   const AI_HIST_KEY = "pt_ai_history";
   const AI_PLACEHOLDER = "Ask, or say 'scan 10.0.0.5 for open ports'…";
-  const AI_WELCOME = "Hi! I'm your offline security assistant. I can **launch scans** for you — "
-    + "just say e.g. *'run a port scan on 10.0.0.5'* and I'll walk you through it. I can also "
-    + "**explain a CVE** (CVE-2023-2975), **summarise a scan** ('scan #12'), check a **package**, "
-    + "or explain a vuln class like **XSS**/**SQLi**. I answer from this platform's local data.";
+  const AI_WELCOME = "Hi! I'm your offline security assistant. I can **launch / rescan / stop / "
+    + "schedule scans** ('run a port scan on 10.0.0.5', 'rescan 94', 'stop scan 95'), build a "
+    + "**patch plan** ('what should I fix first in scan 12'), **compare scans** ('what changed "
+    + "since the last scan on 10.0.0.5'), **explain a CVE** (CVE-2023-2975), **summarise a scan**, "
+    + "check a **package**, or explain a vuln class like **XSS**/**SQLi**. I answer from this "
+    + "platform's local data.";
   let _aiHistory = (() => {
     try { return JSON.parse(localStorage.getItem(AI_HIST_KEY)) || []; } catch (e) { return []; }
   })();
@@ -345,6 +347,9 @@
     input.value = "";
     aiPush("user", msg);
 
+    // ---- Action intents (stop / rescan / schedule) → use existing APIs ----
+    if (await aiTryAction(msg)) return;
+
     // ---- Launch-scan intent → start the in-chat wizard (no model needed) ----
     if (aiLaunchIntent(msg)) { aiStartScanWizard(msg); return; }
 
@@ -407,6 +412,67 @@
     _aiScan = { target: aiExtractTarget(msg) || "", scan_type: aiParseScanType(msg) || "", ssh_port: 22 };
     aiWizardAdvance();
   }
+  // Stop / rescan / schedule a scan straight from chat (role-gated; reuses scan APIs).
+  async function aiTryAction(msg) {
+    const role = (API.user() || {}).role;
+    // --- stop / cancel scan N ---
+    let m = /\b(stop|cancel|halt|abort)\b[^]*?\bscan\b\s*#?\s*(\d+)|\b(stop|cancel|halt|abort)\s+#?(\d+)/i.exec(msg);
+    if (m) {
+      const id = parseInt(m[2] || m[4], 10);
+      if (role === "viewer") { aiPush("assistant", "⚠ Viewers can't control scans."); return true; }
+      if (!confirm(`Stop scan #${id}?`)) { aiPush("assistant", "Okay, leaving it running."); return true; }
+      try { await API.post(`/api/scans/${id}/cancel`); aiPush("assistant", `⏹ Stop requested for **scan #${id}** — it'll halt at the next safe point.`, [`scan#${id}`]); }
+      catch (ex) { aiPush("assistant", "❌ " + (ex.message || ex)); }
+      return true;
+    }
+    // --- rescan N ---
+    m = /\bre-?scan\b\s*#?\s*(\d+)/i.exec(msg);
+    if (m) {
+      const id = parseInt(m[1], 10);
+      if (role === "viewer") { aiPush("assistant", "⚠ Viewers can't launch scans."); return true; }
+      try {
+        const sc = await API.get(`/api/scans/${id}`);
+        const t = await API.get(`/api/targets/${sc.target_id}`);
+        if (sc.scan_type === "credentialed" || sc.scan_type === "cis_benchmark") {
+          aiPush("assistant", `Re-running the **${sc.scan_type}** scan on \`${t.address}\` — it needs credentials, so let's collect them:`);
+          _aiScan = { target: t.address, scan_type: sc.scan_type, ssh_port: 22 };
+          aiWizardAdvance();
+          return true;
+        }
+        if (!confirm(`Rescan #${id} (${sc.scan_type}) on ${t.address}?`)) { aiPush("assistant", "Cancelled."); return true; }
+        const body = { target_id: sc.target_id, scan_type: sc.scan_type };
+        if (sc.scan_type === "custom" && sc.profile) body.custom_flags = sc.profile;
+        const ns = await API.post("/api/scans", body);
+        aiPush("assistant", `✅ **Scan #${ns.id}** (${sc.scan_type}) started on \`${t.address}\`. I'll report when it finishes.`, [`scan#${ns.id}`]);
+        aiWatchScan(ns.id);
+      } catch (ex) { aiPush("assistant", "❌ " + (ex.message || ex)); }
+      return true;
+    }
+    // --- schedule a scan: "schedule a port scan on 10.0.0.5 every 24h" ---
+    if (/\bschedul|recur/i.test(msg) || /\bevery\s+\d+\s*(h|hr|hour|d|day)/i.test(msg)) {
+      if (role === "viewer") { aiPush("assistant", "⚠ Viewers can't schedule scans."); return true; }
+      const host = aiExtractTarget(msg);
+      const type = aiParseScanType(msg) || "full";
+      if (type === "credentialed" || type === "cis_benchmark") {
+        aiPush("assistant", "⚠ Credentialed and CIS scans can't be scheduled (they need in-memory credentials that are never stored). Schedule a network or web scan instead.");
+        return true;
+      }
+      if (!host) { aiPush("assistant", "Which target should I schedule? Tell me an IP/host, e.g. *“schedule a port scan on 10.0.0.5 every 24h”*."); return true; }
+      const im = /\bevery\s+(\d+)\s*(h|hr|hour|d|day)/i.exec(msg);
+      let hours = im ? parseInt(im[1], 10) : 24;
+      if (im && /^d/i.test(im[2])) hours *= 24;
+      try {
+        const targets = await API.get("/api/targets");
+        let t = targets.find((x) => (x.address || "").toLowerCase() === host.toLowerCase());
+        if (!t) t = await API.post("/api/targets", { name: host, address: host, tags: "ai", description: "Created by AI assistant" });
+        await API.post("/api/schedules", { target_id: t.id, scan_type: type, custom_flags: "", interval_hours: hours, enabled: true });
+        aiPush("assistant", `🗓️ Scheduled a **${type}** scan on \`${host}\` **every ${hours}h**. Manage it on the Schedules page.`);
+      } catch (ex) { aiPush("assistant", "❌ " + (ex.message || ex)); }
+      return true;
+    }
+    return false;
+  }
+
   function aiWizardAsk(text) {
     aiRenderMsg("assistant", text);
     const input = document.getElementById("ai-text");
@@ -2022,7 +2088,9 @@
         that. If the model is ever offline, it falls back to a deterministic database summary.</p>
         <div class="about-stats" style="margin-top:6px"><b>Use cases</b></div>
         <ul class="about-list" style="margin-top:8px">
-          <li>🚀 <b>Launch a scan in chat</b> — "run a port scan on 10.0.0.5": it asks for the target, scan type and any credentials, auto-creates the target, starts the scan, and posts the result when it finishes. Credentials are entered in a masked field, used in-memory only, and never stored or sent to the model.</li>
+          <li>🚀 <b>Launch / rescan / stop / schedule scans in chat</b> — "run a port scan on 10.0.0.5", "rescan 94", "stop scan 95", "schedule a web scan on site.local every 24h". It asks for the target, scan type and any credentials, auto-creates the target, and posts the result when it finishes. Credentials are entered in a masked field, used in-memory only, and never stored or sent to the model.</li>
+          <li>🩹 <b>Prioritised patch plan</b> — "what should I fix first in scan 94": findings grouped by package, ordered KEV → severity, with the distro-fixed version when known.</li>
+          <li>🔀 <b>Compare scans</b> — "what changed since the last scan on 10.0.0.5": new vs. resolved vs. unchanged findings.</li>
           <li>💬 <b>Explain a CVE</b> — "explain CVE-2023-2975": severity, CVSS, KEV/EPSS risk, affected products, and the fix, from your local CVE DB.</li>
           <li>📊 <b>Summarise a scan</b> — "summarise scan #12": severity breakdown, top KEV/critical findings, web findings, failed CIS controls.</li>
           <li>📦 <b>Check a package</b> — backport-aware: which advisories affect a package and the distro-fixed version.</li>

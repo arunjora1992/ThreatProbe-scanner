@@ -22,9 +22,17 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..models import (CVE, ConfigFinding, DistroAdvisory, Finding, Host, Package,
-                      Scan, Service, WebFinding)
+                      Scan, Service, Target, WebFinding)
+from . import version_compare
 
 CVE_RE = re.compile(r"CVE-\d{4}-\d{3,7}", re.I)
+FIXPLAN_RE = re.compile(
+    r"(fix plan|patch plan|remediation plan|remediation steps|action plan|fix first|"
+    r"patch first|what should i (fix|patch|remediat)|what to (fix|patch|remediat)|"
+    r"prioriti[sz])\w*", re.I)
+DIFF_RE = re.compile(
+    r"\b(compare|diff|difference|what changed|changed since|since (the )?(last|previous) "
+    r"scan|\bvs\b|versus)\b", re.I)
 SCAN_RE = re.compile(r"scan\s*#?\s*(\d+)", re.I)
 PKG_RE = re.compile(r"(?:package|is|about)\s+([a-zA-Z0-9][\w.+-]{1,40})", re.I)
 HOST_RE = re.compile(r"https?://([^/\s]+)|\b(\d{1,3}(?:\.\d{1,3}){3})\b|\b((?:[a-z0-9-]+\.)+[a-z]{2,})\b", re.I)
@@ -374,8 +382,143 @@ def _fallback(message: str, ctx: dict) -> str:
             "package name, or a vuln class (XSS, SQLi, SSRF, CSP…).")
 
 
+_RANK = {"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1, "INFO": 0, "NONE": 0, "UNKNOWN": 0}
+_RANK_NAME = {4: "CRITICAL", 3: "HIGH", 2: "MEDIUM", 1: "LOW", 0: "INFO"}
+
+
+def _resolve_scan(db: Session, message: str):
+    """A single scan from '#N', a bare number, or the latest scan for a target IP/host."""
+    m = SCAN_RE.search(message)
+    if m:
+        return db.get(Scan, int(m.group(1)))
+    host = _extract_host(message)
+    if host:
+        t = db.query(Target).filter(func.lower(Target.address).like(f"%{host.lower()}%")).first()
+        if t:
+            return (db.query(Scan).filter(Scan.target_id == t.id)
+                    .order_by(Scan.created_at.desc()).first())
+    if not CVE_RE.search(message):
+        nm = re.search(r"(?<![\d.\-])(\d{1,6})(?![\d.\-])", message)
+        if nm:
+            return db.get(Scan, int(nm.group(1)))
+    return None
+
+
+def _answer_fixplan(db: Session, message: str) -> dict:
+    """Deterministic, prioritised remediation plan: group findings by package, recommend
+    the distro-fixed version, order by KEV → severity → CVE count."""
+    scan = _resolve_scan(db, message)
+    if scan:
+        finds = db.query(Finding).filter(Finding.scan_id == scan.id).all()
+        scope = f"scan #{scan.id} ({scan.target.address if scan.target else '?'})"
+        cites = [f"scan#{scan.id}"]
+    else:
+        finds = db.query(Finding).all()
+        scope = "all scans"
+        cites = []
+    if not finds:
+        return {"reply": f"No CVE findings to build a patch plan for ({scope}).",
+                "citations": cites, "grounded": True, "model": False}
+    cve_ids = {f.cve_id for f in finds}
+    cmap = {c.cve_id: c for c in db.query(CVE).filter(CVE.cve_id.in_(cve_ids)).all()}
+    groups = {}
+    for f in finds:
+        svc = f.service
+        pkg = (svc.product or svc.service_name or "asset") if svc else "asset"
+        g = groups.setdefault(pkg, {"cves": set(), "kev": 0, "sev": 0})
+        g["cves"].add(f.cve_id)
+        c = cmap.get(f.cve_id)
+        if c and c.kev:
+            g["kev"] += 1
+        g["sev"] = max(g["sev"], _RANK.get(f.severity, 0))
+
+    def fixver(pkg, cves):
+        best = None
+        for a in db.query(DistroAdvisory).filter(func.lower(DistroAdvisory.package) == pkg.lower(),
+                                                 DistroAdvisory.cve_id.in_(cves)).all():
+            if a.fixed_version and (best is None
+                                    or version_compare.compare(a.manager or "rpm", a.fixed_version, best) > 0):
+                best = a.fixed_version
+        return best
+
+    items = [(pkg, g, fixver(pkg, g["cves"])) for pkg, g in groups.items()]
+    items.sort(key=lambda x: (1 if x[1]["kev"] else 0, x[1]["sev"], len(x[1]["cves"])), reverse=True)
+    lines = [f"**Patch plan — {scope}**: {len(finds)} finding(s) across {len(groups)} package(s). "
+             f"Fix in this order:"]
+    for i, (pkg, g, fv) in enumerate(items[:15], 1):
+        action = f"upgrade to **{fv}**" if fv else "apply the vendor security update"
+        kev = f", {g['kev']} KEV" if g["kev"] else ""
+        lines.append(f"{i}. **{pkg}** — {action} → fixes {len(g['cves'])} CVE(s) "
+                     f"(max {_RANK_NAME[g['sev']]}{kev})")
+    if len(items) > 15:
+        lines.append(f"…and {len(items) - 15} more package(s). Ask for the full report or CSV.")
+    return {"reply": "\n".join(lines), "citations": cites, "grounded": True, "model": False}
+
+
+def _scan_keys(db: Session, scan) -> dict:
+    """Map of finding-key -> label, for diffing two scans."""
+    if scan.scan_type == "cis_benchmark":
+        rows = db.query(ConfigFinding).filter(ConfigFinding.scan_id == scan.id,
+                                              ConfigFinding.status == "fail").all()
+        return {("cis", c.check_id): f"[{c.severity}] {c.title or c.check_id}" for c in rows}
+    out = {}
+    for f in db.query(Finding).filter(Finding.scan_id == scan.id).all():
+        svc = f.service
+        pkg = (svc.product or svc.service_name or "asset") if svc else "asset"
+        out[(f.cve_id, pkg)] = f"{f.cve_id} on {pkg} ({f.severity})"
+    return out
+
+
+def _answer_diff(db: Session, message: str):
+    """Compare two scans: two explicit ids, or the last two scans for a target."""
+    nums = [int(n) for n in re.findall(r"(?<![\d.\-])(\d{1,6})(?![\d.\-])", message)
+            if not CVE_RE.search(message)]
+    a = b = None
+    if len(nums) >= 2:
+        a, b = db.get(Scan, min(nums[0], nums[1])), db.get(Scan, max(nums[0], nums[1]))
+    else:
+        host = _extract_host(message)
+        t = (db.query(Target).filter(func.lower(Target.address).like(f"%{host.lower()}%")).first()
+             if host else None)
+        if not t and len(nums) == 1:
+            s1 = db.get(Scan, nums[0])
+            t = s1.target if s1 else None
+        if t:
+            recent = (db.query(Scan).filter(Scan.target_id == t.id, Scan.status == "completed")
+                      .order_by(Scan.created_at.desc()).limit(2).all())
+            if len(recent) >= 2:
+                b, a = recent[0], recent[1]  # newest=b, previous=a
+    if not a or not b:
+        return None
+    ak, bk = _scan_keys(db, a), _scan_keys(db, b)
+    new = [bk[k] for k in bk if k not in ak]
+    fixed = [ak[k] for k in ak if k not in bk]
+    common = [k for k in bk if k in ak]
+    lines = [f"**Compared scan #{a.id} → #{b.id}** ({(b.target.address if b.target else '?')}): "
+             f"**{len(new)} new**, **{len(fixed)} resolved**, {len(common)} unchanged."]
+    if new:
+        lines.append(f"\n🆕 New ({len(new)}):")
+        lines += [f"• {x}" for x in new[:10]]
+        if len(new) > 10:
+            lines.append(f"…and {len(new) - 10} more.")
+    if fixed:
+        lines.append(f"\n✅ Resolved ({len(fixed)}):")
+        lines += [f"• {x}" for x in fixed[:10]]
+        if len(fixed) > 10:
+            lines.append(f"…and {len(fixed) - 10} more.")
+    return {"reply": "\n".join(lines), "citations": [f"scan#{a.id}", f"scan#{b.id}"],
+            "grounded": True, "model": False}
+
+
 def answer(db: Session, message: str, history: list | None = None) -> dict:
     """Return {'reply': str, 'citations': [...], 'grounded': bool, 'model': bool}."""
+    # Deterministic, cross-scan capabilities first (model-free — always accurate).
+    if FIXPLAN_RE.search(message):
+        return _answer_fixplan(db, message)
+    if DIFF_RE.search(message):
+        diff = _answer_diff(db, message)
+        if diff:
+            return diff
     ctx = retrieve(db, message)
     # Scan queries: a plain "summarise scan N" returns the DETERMINISTIC summary (a small
     # model misreads aggregate counts — e.g. inverting "6 failed" into "no failures"). But

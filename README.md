@@ -647,6 +647,14 @@ What you can ask:
 - **Check a package** — backport-aware: which advisories affect it and the distro-fixed version.
 - **Explain a vuln class** — XSS, SQLi, SSRF, CSRF, IDOR, path traversal, weak TLS, missing
   CSP/HSTS, CORS, clickjacking — what it is and how to fix it.
+- **Prioritised patch plan** — "what should I fix first in scan 94" / "patch plan" → findings
+  grouped by package, ordered KEV → severity → CVE count, with the distro-fixed version when
+  known (deterministic).
+- **Compare scans** — "compare scan 12 and 15" or "what changed since the last scan on
+  10.0.0.5" → new vs. resolved vs. unchanged findings (deterministic diff).
+- **Take action in chat** — "rescan 94" (re-prompts for credentials on credentialed/CIS),
+  "stop scan 95", "schedule a port scan on 10.0.0.5 every 24h" (role-gated; uses the
+  standard scan/schedule APIs).
 
 Architecture: a `llm` service (llama.cpp server, OpenAI-compatible API) serves a GGUF model
 from `./data/models`; the backend's `/api/assistant/chat` builds the grounded prompt and the
