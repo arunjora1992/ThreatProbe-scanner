@@ -49,6 +49,12 @@ DEFINITIONS: Dict[str, dict] = {
         "choices": ["full", "discovery", "port", "web", "zap_passive", "zap_active",
                     "credentialed", "cis_benchmark"],
         "label": "Default scan type", "help": "Pre-selected scan type in the launch dialog."},
+    "cis_oscap_timeout_seconds": {
+        "group": "scanning", "type": "int", "default": 1800, "min": 300, "max": 7200,
+        "label": "CIS OpenSCAP eval timeout (seconds)",
+        "help": "Max time for the OpenSCAP CIS evaluation over SSH. A full L1 Server profile "
+                "can take 10–25 min on a slow host. On timeout the scan falls back to the "
+                "built-in hardening checks instead of failing."},
 
     # ---- Web / ZAP ----
     "zap_spider_max_minutes": {

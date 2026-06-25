@@ -1165,6 +1165,8 @@
           <td>${fmtDate(s.created_at)}</td>
           <td onclick="event.stopPropagation()" class="pill-row">
             <button class="btn btn-sm" onclick="ptOpenScan(${s.id})">View</button>
+            ${s.status !== "queued" ? `<button class="btn btn-sm" title="Download PDF report" onclick="ptDownload(${s.id},'pdf')">⬇ PDF</button>
+            <button class="btn btn-sm" title="Download CSV report" onclick="ptDownload(${s.id},'csv')">⬇ CSV</button>` : ""}
             ${(s.status === "running" || s.status === "queued") ? `<button class="btn btn-sm" onclick="ptCancelScan(${s.id})">⏹ Stop</button>` : ""}
             <button class="btn btn-sm btn-danger" onclick="ptDelScan(${s.id})">Del</button>
           </td></tr>`;

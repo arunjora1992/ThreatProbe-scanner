@@ -19,7 +19,7 @@ from typing import List, Optional, Tuple
 
 import paramiko
 
-from . import hardening, openscap
+from . import app_settings, hardening, openscap
 
 CONNECT_TIMEOUT = 20
 EXEC_TIMEOUT = 60
@@ -172,16 +172,24 @@ def collect_compliance(
         def ex(cmd, timeout=EXEC_TIMEOUT):
             return _exec(client, cmd, timeout=timeout)
 
-        # oscap eval over a full benchmark can take a few minutes — give it room.
-        scap = openscap.run(lambda c: ex(c, timeout=900), os_id, cr.os_version,
-                            prefer_profile, log=log)
-        if scap.available:
+        # oscap eval over a full benchmark can take many minutes on a slow host — give it
+        # a generous, GUI-configurable cap. On timeout/error, fall back to built-in checks
+        # instead of failing the whole scan.
+        oscap_to = app_settings.get_int("cis_oscap_timeout_seconds")
+        scap = None
+        try:
+            scap = openscap.run(lambda c: ex(c, timeout=oscap_to), os_id, cr.os_version,
+                                prefer_profile, log=log)
+        except Exception as exc:  # noqa: BLE001 - timeout/transport → graceful fallback
+            log(f"OpenSCAP evaluation did not finish ({exc}); falling back to built-in checks.")
+        if scap and scap.available:
             cr.mode = "openscap"
             cr.profile, cr.datastream, cr.score = scap.profile, scap.datastream, scap.score
             cr.results = scap.results
         else:
             cr.mode = "builtin"
-            cr.reason = scap.reason
+            cr.reason = scap.reason if scap else (
+                f"OpenSCAP eval exceeded {oscap_to}s (slow host) or errored")
             cr.results = hardening.run_hardening_checks(lambda c: ex(c, timeout=40))
         return cr
     finally:
