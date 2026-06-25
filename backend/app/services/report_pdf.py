@@ -6,6 +6,7 @@ Produces an executive-style assessment report:
   - Per-host service inventory
   - Detailed findings (vulnerability, CVSS, description, remediation, references)
 """
+import base64
 import io
 from collections import Counter
 from datetime import datetime
@@ -17,6 +18,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm
 from reportlab.platypus import (
+    Image,
     Paragraph as _RLParagraph,
     SimpleDocTemplate,
     Spacer,
@@ -82,22 +84,44 @@ PANEL_BG = colors.HexColor("#eef2ff")   # light indigo for label columns
 ZEBRA = colors.HexColor("#f7f8fc")
 
 
-def _brand_name(db=None) -> str:
-    """The white-label application name from BrandingConfig (default ThreatProbe Scanner)."""
+def _logo_flowable(data_url: str, max_h: float = 34):
+    """A reportlab Image from a branding logo data URI (raster only — PNG/JPG/GIF).
+    SVG/none → None (reportlab can't rasterise SVG without extra deps)."""
+    try:
+        if not data_url or not data_url.startswith("data:image/"):
+            return None
+        header, b64 = data_url.split(",", 1)
+        if "svg" in header.lower():
+            return None  # vector — skip in PDF, keep the name only
+        raw = base64.b64decode(b64)
+        img = Image(io.BytesIO(raw))
+        if img.imageWidth and img.imageHeight:
+            scale = max_h / float(img.imageHeight)
+            img.drawHeight = max_h
+            img.drawWidth = img.imageWidth * scale
+        return img
+    except Exception:
+        return None
+
+
+def _brand(db=None):
+    """(app_name, logo_flowable_or_None) from BrandingConfig."""
     try:
         from ..models import BrandingConfig
-        if db is not None:
+        if db is None:
+            from ..database import SessionLocal
+            s = SessionLocal()
+            try:
+                b = s.query(BrandingConfig).first()
+            finally:
+                s.close()
+        else:
             b = db.query(BrandingConfig).first()
-            return (b.app_name if b and b.app_name else "ThreatProbe Scanner")
-        from ..database import SessionLocal
-        s = SessionLocal()
-        try:
-            b = s.query(BrandingConfig).first()
-            return (b.app_name if b and b.app_name else "ThreatProbe Scanner")
-        finally:
-            s.close()
+        name = (b.app_name if b and b.app_name else "ThreatProbe Scanner")
+        logo = _logo_flowable(b.logo_data_url) if b and getattr(b, "logo_data_url", "") else None
+        return name, logo
     except Exception:
-        return "ThreatProbe Scanner"
+        return "ThreatProbe Scanner", None
 
 
 def _footer(brand):
@@ -114,21 +138,29 @@ def _footer(brand):
     return draw
 
 
-def _title_band(ss, title, subtitle, brand="ThreatProbe Scanner"):
-    """A full-width branded header band (indigo) + cyan accent stripe, led by the tool name."""
-    band = Table([[Paragraph(brand, ss["BandBrand"])],
-                  [Paragraph(title, ss["BandTitle"])],
-                  [Paragraph(subtitle, ss["BandSub"])]], colWidths=[17 * cm])
+def _title_band(ss, title, subtitle, brand="ThreatProbe Scanner", logo=None):
+    """A full-width branded header band (indigo) + cyan accent stripe: optional logo on the
+    left, then tool name / report title / subtitle."""
+    text = [[Paragraph(brand, ss["BandBrand"])],
+            [Paragraph(title, ss["BandTitle"])],
+            [Paragraph(subtitle, ss["BandSub"])]]
+    txt_tbl = Table(text, colWidths=[(14.6 if logo else 16.6) * cm])
+    txt_tbl.setStyle(TableStyle([
+        ("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ("TOPPADDING", (0, 0), (0, 0), 0), ("BOTTOMPADDING", (0, 0), (0, 0), 1),
+        ("TOPPADDING", (0, 1), (0, 1), 1), ("BOTTOMPADDING", (0, 1), (0, 1), 2),
+        ("TOPPADDING", (0, 2), (0, 2), 0), ("BOTTOMPADDING", (0, 2), (0, 2), 0),
+    ]))
+    row = [[logo, txt_tbl]] if logo else [[txt_tbl]]
+    widths = [2.0 * cm, 15.0 * cm] if logo else [17 * cm]
+    band = Table(row, colWidths=widths)
     band.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, -1), BRAND),
         ("LEFTPADDING", (0, 0), (-1, -1), 16),
         ("RIGHTPADDING", (0, 0), (-1, -1), 16),
-        ("TOPPADDING", (0, 0), (0, 0), 12),
-        ("BOTTOMPADDING", (0, 0), (0, 0), 1),
-        ("TOPPADDING", (0, 1), (0, 1), 1),
-        ("BOTTOMPADDING", (0, 1), (0, 1), 2),
-        ("TOPPADDING", (0, 2), (0, 2), 0),
-        ("BOTTOMPADDING", (0, 2), (0, 2), 13),
+        ("TOPPADDING", (0, 0), (-1, -1), 12),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 12),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
     ]))
     stripe = Table([[""]], colWidths=[17 * cm], rowHeights=[3.5])
     stripe.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), ACCENT)]))
@@ -175,8 +207,8 @@ def build_findings_pdf(db: Session, scan: Scan) -> bytes:
     report_title = titles.get(stype, "Vulnerability Assessment Report")
 
     # ---- Title band ----
-    brand = _brand_name(db)
-    story += _title_band(ss, report_title, "Air-Gapped Penetration Testing Platform", brand)
+    brand, logo = _brand(db)
+    story += _title_band(ss, report_title, "Air-Gapped Penetration Testing Platform", brand, logo)
 
     meta = [
         ["Target", f"{target.name} ({target.address})"],
@@ -466,9 +498,9 @@ def build_consolidated_pdf(data: dict) -> bytes:
     filters = meta.get("filters", {})
     counts = meta.get("counts", {})
 
-    brand = _brand_name()
+    brand, logo = _brand()
     story += _title_band(ss, "Consolidated Vulnerability Report",
-                         "Air-Gapped Penetration Testing Platform", brand)
+                         "Air-Gapped Penetration Testing Platform", brand, logo)
 
     # ---- Filter / scope summary ----
     story.append(Paragraph("Report scope & filters", ss["Heading2"]))
