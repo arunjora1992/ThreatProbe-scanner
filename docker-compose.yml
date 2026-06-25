@@ -126,7 +126,7 @@ services:
         if [ -f /models/.active ]; then SEL="$$(cat /models/.active)"; [ -f "/models/$$SEL" ] && MODEL="/models/$$SEL"; fi;
         [ -z "$$MODEL" ] && MODEL="$$(ls -S /models/*.gguf 2>/dev/null | head -n1)";
         echo "Loading model: $$MODEL";
-        exec /app/llama-server -m "$$MODEL" -c 4096 --threads 4 --host 0.0.0.0 --port 8091
+        exec /app/llama-server -m "$$MODEL" -c 8192 --threads 4 --jinja --host 0.0.0.0 --port 8091
     volumes:
       - ./data/models:/models:ro
     mem_limit: 5g

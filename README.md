@@ -657,10 +657,19 @@ What you can ask:
   "stop scan 95", "schedule a port scan on 10.0.0.5 every 24h" (role-gated; uses the
   standard scan/schedule APIs).
 
-Architecture: a `llm` service (llama.cpp server, OpenAI-compatible API) serves a GGUF model
-from `./data/models`; the backend's `/api/assistant/chat` builds the grounded prompt and the
-read-only retrieval tools. The scan launcher is a client-side wizard over the existing
-`/api/targets` + `/api/scans` endpoints. The model phrases; the DB supplies facts.
+- **Agentic mode (multi-step tool-calling)** — *opt-in* (Settings → AI Assistant). Instead of
+  rule-based routing, the model runs a **ReAct loop**: it's given read-only, DB-grounded tools
+  (`lookup_cve`, `search_cves`, `package_cves`, `list_scans`, `scan_summary`, `patch_plan`,
+  `diff_scans`, `risk_posture`), decides which to call, gets the results, and reasons over
+  multiple steps to answer. Facts come from the tools (accurate); the model plans + phrases.
+  Needs a **tool-capable model** — load **Qwen2.5-7B-Instruct** via the model manager for
+  good results (small models tool-call unreliably). Write-actions stay in the confirmed
+  rule-based path; the loop is read-only and falls back to the standard assistant on error.
+
+Architecture: a `llm` service (llama.cpp server, OpenAI-compatible API, started with
+`--jinja` for tool templates) serves a GGUF from `./data/models`; `/api/assistant/chat`
+builds the grounded prompt and retrieval tools. The scan launcher is a client-side wizard
+over the existing `/api/targets` + `/api/scans` endpoints. The model phrases; the DB supplies facts.
 
 **Model & resources.** Default model is **Qwen2.5-1.5B-Instruct (Q4_K_M, ~1 GB)**. Swapping
 needs **no code or compose edits** — the `llm` container auto-loads the model named in
@@ -931,6 +940,7 @@ in the section above; commit hashes are on the `main` branch.
 
 | Date | Feature | Commit |
 |------|---------|--------|
+| 2026-06-25 | **AI: agentic mode (ReAct tool-calling)** — opt-in multi-step loop over read-only DB-grounded tools (best on a 7B model); plus a deterministic package-CVE lookup. | `(latest)` |
 | 2026-06-25 | **AI: patch plan, scan diff, and chat actions** — "what should I fix first", "what changed since the last scan", and "rescan/stop/schedule" straight from chat. | `69aec2a` |
 | 2026-06-24 | **GUI AI-model manager + zero-edit model swap** — list/download/select/delete GGUFs; the engine auto-loads the selected (or largest) model. | `5910a9d` |
 | 2026-06-24 | **In-chat scan-launcher wizard** (target → type → credentials → confirm → auto-summary) + per-scan **result counts**. | `816ded9` |

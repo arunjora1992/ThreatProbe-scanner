@@ -116,6 +116,13 @@ DEFINITIONS: Dict[str, dict] = {
         "label": "Enable the offline AI assistant",
         "help": "Show the chat widget. The assistant answers from local data only "
                 "(grounded on the CVE DB / scan findings) using the bundled offline model."},
+    "assistant_agent_mode": {
+        "group": "assistant", "type": "bool", "default": False,
+        "label": "Agentic mode (multi-step tool-calling)",
+        "help": "Let the model plan multi-step and call read-only data tools (ReAct) instead "
+                "of rule-based routing. Needs a tool-capable model — use a 7B (e.g. "
+                "Qwen2.5-7B-Instruct) via the model manager; small models do this unreliably. "
+                "Falls back to the standard assistant on error."},
 }
 
 _TTL = 5.0

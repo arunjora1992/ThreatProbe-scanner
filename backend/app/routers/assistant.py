@@ -71,4 +71,12 @@ def chat(payload: dict, db: Session = Depends(get_db), _: User = Depends(get_cur
                          "vulnerability class like XSS or SQLi.", "citations": [],
                 "grounded": False, "model": assistant.llm_available()}
     history = payload.get("history") or []
-    return assistant.answer(db, message[:2000], history)
+    msg = message[:2000]
+    # Agentic mode: model-driven multi-step tool-calling (falls back on any error).
+    if app_settings.get_bool("assistant_agent_mode") and assistant.llm_available():
+        from ..services import agent
+        try:
+            return agent.agent_answer(db, msg, history)
+        except Exception:  # noqa: BLE001 — transport/model/tool error → rule-based fallback
+            pass
+    return assistant.answer(db, msg, history)

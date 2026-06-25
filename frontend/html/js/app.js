@@ -2267,6 +2267,7 @@
           <li>🚀 <b>Launch / rescan / stop / schedule scans in chat</b> — "run a port scan on 10.0.0.5", "rescan 94", "stop scan 95", "schedule a web scan on site.local every 24h". It asks for the target, scan type and any credentials, auto-creates the target, and posts the result when it finishes. Credentials are entered in a masked field, used in-memory only, and never stored or sent to the model.</li>
           <li>🩹 <b>Prioritised patch plan</b> — "what should I fix first in scan 94": findings grouped by package, ordered KEV → severity, with the distro-fixed version when known.</li>
           <li>🔀 <b>Compare scans</b> — "what changed since the last scan on 10.0.0.5": new vs. resolved vs. unchanged findings.</li>
+          <li>🧠 <b>Agentic mode</b> (opt-in, Settings → AI Assistant) — the model plans multi-step and calls read-only data tools (ReAct) to answer richer questions. Best with a 7B model loaded via the model manager.</li>
           <li>💬 <b>Explain a CVE</b> — "explain CVE-2023-2975": severity, CVSS, KEV/EPSS risk, affected products, and the fix, from your local CVE DB.</li>
           <li>📊 <b>Summarise a scan</b> — "summarise scan #12": severity breakdown, top KEV/critical findings, web findings, failed CIS controls.</li>
           <li>📦 <b>Check a package</b> — backport-aware: which advisories affect a package and the distro-fixed version.</li>
