@@ -85,34 +85,42 @@
   function chartCard(title, inner) {
     return `<div class="card chart-card"><div class="muted small" style="margin-bottom:6px">${esc(title)}</div>${inner}</div>`;
   }
-  // Responsive area+line chart from items [{label,value}]. Gradient fill, dots, x labels.
+  // Responsive area+line chart from items [{label,value}]. Uniform scaling (no stretch),
+  // y-axis gridlines + labels, gradient fill, dots, sparse x labels.
   function svgArea(items, stroke) {
-    const W = 640, H = 170, padX = 14, padTop = 14, padBot = 26;
+    const W = 760, H = 220, padL = 30, padR = 14, padTop = 16, padBot = 26;
     const n = items.length;
-    const max = Math.max(1, ...items.map((i) => i.value));
-    const iw = W - padX * 2, ih = H - padTop - padBot;
-    const X = (i) => padX + (n <= 1 ? iw / 2 : (iw * i) / (n - 1));
+    const rawMax = Math.max(1, ...items.map((i) => i.value));
+    // round the axis max up to a "nice" number so gridline labels are whole/clean
+    const niceMax = (m) => { const p = Math.pow(10, Math.floor(Math.log10(m))); const r = m / p;
+      return (r <= 1 ? 1 : r <= 2 ? 2 : r <= 5 ? 5 : 10) * p; };
+    const max = niceMax(rawMax);
+    const iw = W - padL - padR, ih = H - padTop - padBot;
+    const X = (i) => padL + (n <= 1 ? iw / 2 : (iw * i) / (n - 1));
     const Y = (v) => padTop + ih * (1 - v / max);
     const pts = items.map((it, i) => `${X(i).toFixed(1)},${Y(it.value).toFixed(1)}`).join(" ");
-    const areaPts = `${padX},${(padTop + ih).toFixed(1)} ${pts} ${(padX + iw).toFixed(1)},${(padTop + ih).toFixed(1)}`;
-    const gridY = padTop + ih;
-    const dots = items.map((it, i) =>
-      `<circle cx="${X(i).toFixed(1)}" cy="${Y(it.value).toFixed(1)}" r="${it.value ? 2.6 : 0}" fill="${stroke}"></circle>`).join("");
-    // Label every ~Nth point so they don't collide.
-    const step = Math.ceil(n / 7);
+    const base = padTop + ih;
+    const areaPts = `${padL},${base.toFixed(1)} ${pts} ${(padL + iw).toFixed(1)},${base.toFixed(1)}`;
+    // 3 horizontal gridlines (0, mid, max) with value labels
+    const ticks = [0, max / 2, max];
+    const grid = ticks.map((v) => {
+      const y = Y(v).toFixed(1);
+      return `<line x1="${padL}" y1="${y}" x2="${padL + iw}" y2="${y}" stroke="var(--border)" stroke-width="1" opacity="0.6"/>`
+        + `<text x="${padL - 6}" y="${(+y + 3).toFixed(1)}" text-anchor="end" font-size="9" fill="var(--muted)">${Number.isInteger(v) ? v : v.toFixed(0)}</text>`;
+    }).join("");
+    const dots = items.map((it, i) => it.value
+      ? `<circle cx="${X(i).toFixed(1)}" cy="${Y(it.value).toFixed(1)}" r="3" fill="var(--panel)" stroke="${stroke}" stroke-width="2"></circle>` : "").join("");
+    const step = Math.max(1, Math.ceil(n / 7));
     const labels = items.map((it, i) => (i % step === 0 || i === n - 1)
       ? `<text x="${X(i).toFixed(1)}" y="${H - 8}" text-anchor="middle" font-size="9" fill="var(--muted)">${esc(it.label)}</text>` : "").join("");
-    const total = items.reduce((a, x) => a + x.value, 0);
-    return `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none" role="img">
+    return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="height:auto;display:block" preserveAspectRatio="xMidYMid meet" role="img">
       <defs><linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0" stop-color="${stroke}" stop-opacity=".35"/>
+        <stop offset="0" stop-color="${stroke}" stop-opacity=".30"/>
         <stop offset="1" stop-color="${stroke}" stop-opacity="0"/></linearGradient></defs>
-      <line x1="${padX}" y1="${gridY}" x2="${padX + iw}" y2="${gridY}" stroke="var(--border)" stroke-width="1"/>
+      ${grid}
       <polygon points="${areaPts}" fill="url(#areaGrad)"/>
       <polyline points="${pts}" fill="none" stroke="${stroke}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
       ${dots}${labels}
-      <text x="${padX}" y="${padTop + 2}" font-size="10" fill="var(--muted)">peak ${max}</text>
-      <text x="${padX + iw}" y="${padTop + 2}" text-anchor="end" font-size="10" fill="var(--muted)">${total} total</text>
     </svg>`;
   }
 
@@ -898,7 +906,7 @@
                     : `<p class="muted small">No scans yet.</p>`)}
         </div>
         <div class="chart-row">
-          ${chartCard("Scan activity · last 14 days",
+          ${chartCard(`Scan activity · last 14 days (${trendTotal} scan${trendTotal === 1 ? "" : "s"})`,
             trendTotal ? svgArea(trend.map((t) => ({ label: t.date, value: t.count })), "var(--primary)")
                        : `<p class="muted small">No scans in the last 14 days.</p>`)}
         </div>

@@ -8,6 +8,7 @@ Produces an executive-style assessment report:
 """
 import io
 from collections import Counter
+from datetime import datetime
 from typing import List
 
 from reportlab.lib import colors
@@ -81,18 +82,53 @@ PANEL_BG = colors.HexColor("#eef2ff")   # light indigo for label columns
 ZEBRA = colors.HexColor("#f7f8fc")
 
 
-def _title_band(ss, title, subtitle):
-    """A full-width branded header band (indigo) + cyan accent stripe."""
-    band = Table([[Paragraph(title, ss["BandTitle"])],
+def _brand_name(db=None) -> str:
+    """The white-label application name from BrandingConfig (default ThreatProbe Scanner)."""
+    try:
+        from ..models import BrandingConfig
+        if db is not None:
+            b = db.query(BrandingConfig).first()
+            return (b.app_name if b and b.app_name else "ThreatProbe Scanner")
+        from ..database import SessionLocal
+        s = SessionLocal()
+        try:
+            b = s.query(BrandingConfig).first()
+            return (b.app_name if b and b.app_name else "ThreatProbe Scanner")
+        finally:
+            s.close()
+    except Exception:
+        return "ThreatProbe Scanner"
+
+
+def _footer(brand):
+    """Per-page footer: tool name · generated timestamp · page number."""
+    ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+
+    def draw(canvas, doc):
+        canvas.saveState()
+        canvas.setFont("Helvetica", 7.5)
+        canvas.setFillColor(colors.HexColor("#8a8a8a"))
+        canvas.drawString(1.5 * cm, 0.9 * cm, f"{brand}  ·  generated {ts}")
+        canvas.drawRightString(A4[0] - 1.5 * cm, 0.9 * cm, f"Page {doc.page}")
+        canvas.restoreState()
+    return draw
+
+
+def _title_band(ss, title, subtitle, brand="ThreatProbe Scanner"):
+    """A full-width branded header band (indigo) + cyan accent stripe, led by the tool name."""
+    band = Table([[Paragraph(brand, ss["BandBrand"])],
+                  [Paragraph(title, ss["BandTitle"])],
                   [Paragraph(subtitle, ss["BandSub"])]], colWidths=[17 * cm])
     band.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, -1), BRAND),
         ("LEFTPADDING", (0, 0), (-1, -1), 16),
         ("RIGHTPADDING", (0, 0), (-1, -1), 16),
-        ("TOPPADDING", (0, 0), (0, 0), 14),
-        ("BOTTOMPADDING", (0, 0), (0, 0), 2),
-        ("TOPPADDING", (0, 1), (0, 1), 0),
-        ("BOTTOMPADDING", (0, 1), (0, 1), 14),
+        ("TOPPADDING", (0, 0), (0, 0), 12),
+        ("BOTTOMPADDING", (0, 0), (0, 0), 1),
+        ("TOPPADDING", (0, 1), (0, 1), 1),
+        ("BOTTOMPADDING", (0, 1), (0, 1), 2),
+        ("TOPPADDING", (0, 2), (0, 2), 0),
+        ("BOTTOMPADDING", (0, 2), (0, 2), 13),
     ]))
     stripe = Table([[""]], colWidths=[17 * cm], rowHeights=[3.5])
     stripe.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), ACCENT)]))
@@ -106,6 +142,8 @@ def _styles():
     ss.add(ParagraphStyle("H1c", parent=ss["Title"], fontSize=22, spaceAfter=6))
     ss.add(ParagraphStyle("Sub", parent=ss["Normal"], fontSize=11,
                           textColor=colors.HexColor("#555555")))
+    ss.add(ParagraphStyle("BandBrand", parent=ss["Normal"], fontSize=11, spaceAfter=0,
+                          textColor=colors.HexColor("#e0e7ff"), fontName="Helvetica-Bold"))
     ss.add(ParagraphStyle("BandTitle", parent=ss["Title"], fontSize=21, spaceAfter=0,
                           textColor=colors.white, alignment=TA_LEFT, leading=24))
     ss.add(ParagraphStyle("BandSub", parent=ss["Normal"], fontSize=10.5,
@@ -137,7 +175,8 @@ def build_findings_pdf(db: Session, scan: Scan) -> bytes:
     report_title = titles.get(stype, "Vulnerability Assessment Report")
 
     # ---- Title band ----
-    story += _title_band(ss, report_title, "Air-Gapped Penetration Testing Platform")
+    brand = _brand_name(db)
+    story += _title_band(ss, report_title, "Air-Gapped Penetration Testing Platform", brand)
 
     meta = [
         ["Target", f"{target.name} ({target.address})"],
@@ -408,7 +447,7 @@ def build_findings_pdf(db: Session, scan: Scan) -> bytes:
             ]))
             story.append(ft)
 
-    doc.build(story)
+    doc.build(story, onFirstPage=_footer(brand), onLaterPages=_footer(brand))
     return buf.getvalue()
 
 
@@ -427,8 +466,9 @@ def build_consolidated_pdf(data: dict) -> bytes:
     filters = meta.get("filters", {})
     counts = meta.get("counts", {})
 
+    brand = _brand_name()
     story += _title_band(ss, "Consolidated Vulnerability Report",
-                         "Air-Gapped Penetration Testing Platform")
+                         "Air-Gapped Penetration Testing Platform", brand)
 
     # ---- Filter / scope summary ----
     story.append(Paragraph("Report scope & filters", ss["Heading2"]))
@@ -569,5 +609,5 @@ def build_consolidated_pdf(data: dict) -> bytes:
         story.append(Spacer(1, 0.4 * cm))
         story.append(Paragraph("No findings match the selected filters.", ss["Normal"]))
 
-    doc.build(story)
+    doc.build(story, onFirstPage=_footer(brand), onLaterPages=_footer(brand))
     return buf.getvalue()

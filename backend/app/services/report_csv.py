@@ -1,17 +1,43 @@
 """CSV report generation for a scan's findings."""
 import csv
 import io
+from datetime import datetime
 from typing import List
 
 from sqlalchemy.orm import Session
 
-from ..models import CVE, ConfigFinding, Finding, Host, Package, Scan, Service, WebFinding
+from ..models import (BrandingConfig, CVE, ConfigFinding, Finding, Host, Package, Scan,
+                      Service, WebFinding)
+
+
+def _brand_name(db=None) -> str:
+    try:
+        if db is None:
+            from ..database import SessionLocal
+            s = SessionLocal()
+            try:
+                b = s.query(BrandingConfig).first()
+                return b.app_name if b and b.app_name else "ThreatProbe Scanner"
+            finally:
+                s.close()
+        b = db.query(BrandingConfig).first()
+        return b.app_name if b and b.app_name else "ThreatProbe Scanner"
+    except Exception:
+        return "ThreatProbe Scanner"
+
+
+def _brand_header(w, db, title: str):
+    """Two-line provenance header on every CSV: tool name + generated timestamp."""
+    w.writerow([f"{_brand_name(db)} — {title}"])
+    w.writerow([f"Generated {datetime.utcnow():%Y-%m-%d %H:%M} UTC"])
+    w.writerow([])
 
 
 def build_consolidated_csv(data: dict) -> str:
     """Render a filtered, multi-scan report (from report_query.collect_report_rows) to CSV."""
     out = io.StringIO()
     writer = csv.writer(out)
+    _brand_header(writer, None, "Consolidated vulnerability report")
     writer.writerow([
         "Type", "Scan", "Target", "Asset", "Port", "Service/Category", "Product",
         "Version", "Finding/CVE", "Severity", "CVSS", "Confidence",
@@ -74,6 +100,7 @@ def build_findings_csv(db: Session, scan: Scan) -> str:
     """A CSV whose columns suit the scan type (no irrelevant blank columns)."""
     out = io.StringIO()
     w = csv.writer(out)
+    _brand_header(w, db, f"{scan.scan_type} report · scan #{scan.id}")
     t = scan.scan_type
 
     if t == "cis_benchmark":
