@@ -2311,7 +2311,8 @@
           <li>✅ Served over <b>HTTPS</b> (self-signed by default); credentials are used <b>in-memory only and never stored</b>.</li>
           <li>✅ Role-based access (admin / operator / viewer), white-label branding, and stop-anytime scans.</li>
           <li>✅ Threat-intel enrichment (KEV + EPSS) and distro-accurate matching (RHEL/CentOS/Oracle/Rocky, Ubuntu/Debian).</li>
-          <li>✅ <b>Offline AI assistant</b> grounded on local data, and a <b>tabbed Settings</b> page to tune the engine live (no redeploy).</li>
+          <li>✅ <b>Offline AI assistant</b> grounded on local data (local <b>or</b> a remote GPU model), and a <b>tabbed Settings</b> page to tune the engine live (no redeploy).</li>
+          <li>✅ <b>Branded reports</b> (tool name + logo, per-page footer), per-scan <b>PDF/CSV</b> downloads, sortable/collapsible result tables, and a dashboard of <b>top at-risk hosts &amp; packages</b>.</li>
         </ul>
         <p class="muted small" style="margin-top:10px">⚠ For authorized security testing only. Scan only systems you own or have explicit written permission to assess.</p>
       </div>`;

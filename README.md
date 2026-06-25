@@ -368,7 +368,10 @@ Two engines, auto-selected:
   (`dnf`/`yum`/`apt`/`zypper`); if that fails (no root or no package mirror) it falls back
   to the built-in checks. You choose the **profile/level** in the launch dialog — **Level 1
   / Level 2**, **Server / Workstation** — and on RHEL clones (CentOS Stream / Rocky / Alma)
-  the matching SSG datastream is preferred so rules aren't all marked *notapplicable*.
+  the matching SSG datastream is preferred so rules aren't all marked *notapplicable*. The
+  evaluation timeout is **GUI-configurable** (Settings → Scanning, default **1 hour**) —
+  filesystem-walking rules (e.g. world-writable checks) are slow on large disks — and on
+  timeout the scan **falls back to the built-in checks** instead of failing.
 - **Built-in agentless checks (default fallback)** — when OpenSCAP isn't available, a set
   of read-only checks run from the scanner over SSH (reading configs, sysctls, perms):
   SSH config (root login, password/empty-password auth, X11), password policy
@@ -597,6 +600,16 @@ From any scan detail page:
   - **web/URL findings** (category, severity, evidence, remediation).
 
 Endpoints: `GET /api/reports/scan/{id}/csv` and `GET /api/reports/scan/{id}/pdf`.
+
+**Branding & provenance.** PDF reports lead with the **white-label tool name and uploaded
+logo** in the header band and a **per-page footer** (`<tool> · generated <timestamp> ·
+Page N`); CSV reports carry a two-line provenance header (tool name + generated timestamp).
+Filenames include the **target, scan type, scan id and timestamp**
+(`10.0.12.232_credentialed_scan94_20260624-1823_report.pdf`).
+
+**Quick access.** Each row on the **Scans** page has **⬇ PDF / ⬇ CSV** buttons; on the scan
+detail page, result sections are **collapsible** and **sortable**, and the CVE Database +
+package-inventory tables are **click-to-sort** by any column.
 
 ### Filtered / consolidated reports
 
@@ -948,7 +961,11 @@ in the section above; commit hashes are on the `main` branch.
 
 | Date | Feature | Commit |
 |------|---------|--------|
-| 2026-06-25 | **AI: local or remote model source** — point the assistant at an OpenAI-compatible server on a GPU box (URL/model/key) or use the bundled offline model, switchable in Settings. | `(latest)` |
+| 2026-06-25 | **Dashboard: Top vulnerable hosts + Top affected packages** bar charts (replacing the scan-activity line). | `7eeca96` |
+| 2026-06-25 | **Branded reports** — tool name + uploaded logo in the PDF header, per-page footer, and a CSV provenance header (tool + timestamp). | `b874940` |
+| 2026-06-25 | **Per-scan PDF/CSV download buttons** on the Scans list; **sortable + collapsible** result sections; **click-to-sort** columns on CVE DB + package inventory. | `de04b8a` |
+| 2026-06-25 | **Configurable CIS OpenSCAP timeout** (default 1 h) with graceful fall-back to built-in checks on timeout. | `de04b8a` |
+| 2026-06-25 | **AI: local or remote model source** — point the assistant at an OpenAI-compatible server on a GPU box (URL/model/key) or use the bundled offline model, switchable in Settings. | `4d721bb` |
 | 2026-06-25 | **AI: agentic mode (ReAct tool-calling)** — opt-in multi-step loop over read-only DB-grounded tools (best on a 7B model); plus a deterministic package-CVE lookup. | `b679e35` |
 | 2026-06-25 | **AI: patch plan, scan diff, and chat actions** — "what should I fix first", "what changed since the last scan", and "rescan/stop/schedule" straight from chat. | `69aec2a` |
 | 2026-06-24 | **GUI AI-model manager + zero-edit model swap** — list/download/select/delete GGUFs; the engine auto-loads the selected (or largest) model. | `5910a9d` |
@@ -975,6 +992,7 @@ Commit hashes are on the `main` branch.
 
 | Date | Area | Bug → Fix | Commit |
 |------|------|-----------|--------|
+| 2026-06-25 | CIS / OpenSCAP | A CIS scan on a large-disk host **hard-failed at the 900s SSH cap** while `oscap` was still running (filesystem-walking rules are slow). → OpenSCAP eval timeout is now GUI-configurable (default 1 h) and a timeout **falls back to built-in checks** instead of failing. | `de04b8a` |
 | 2026-06-25 | Reports / AI | Report filenames lacked context; AI showed results for still-running scans; AI dumped the whole summary for pointed questions and miscounted ("21" of 484). → Filenames now `target_type_scanID_timestamp_report.*`; running scans return an "in progress" message (wizard waits for completion); pointed questions are answered as focused insights while counts stay deterministic. | `010145c` |
 | 2026-06-24 | AI assistant | "scan result of **89**" wasn't recognised (only "scan #N" matched), so the model answered from empty context; intent stems (`summarise`, `vulnerability`) never matched. → Resolve scans by bare number, and fixed stem matching. | `67d7cdf` |
 | 2026-06-24 | AI assistant | A scan referenced by **target IP** ("scan on 10.0.10.246") bypassed the deterministic path and the model hallucinated "no findings". → Resolve a target's latest scan from an IP/host. | `e580906` |
