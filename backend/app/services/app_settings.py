@@ -123,6 +123,26 @@ DEFINITIONS: Dict[str, dict] = {
                 "of rule-based routing. Needs a tool-capable model — use a 7B (e.g. "
                 "Qwen2.5-7B-Instruct) via the model manager; small models do this unreliably. "
                 "Falls back to the standard assistant on error."},
+    "llm_mode": {
+        "group": "assistant", "type": "choice", "default": "local", "choices": ["local", "remote"],
+        "label": "AI model source",
+        "help": "local = the bundled offline model in this deployment. remote = an "
+                "OpenAI-compatible server elsewhere (e.g. a GPU box running llama.cpp or "
+                "Ollama). Switch any time — the rest of the assistant is unchanged."},
+    "llm_remote_url": {
+        "group": "assistant", "type": "str", "default": "",
+        "label": "Remote model URL (when source = remote)",
+        "help": "Base URL of an OpenAI-compatible server, e.g. http://192.168.1.50:8091 . "
+                "The assistant calls <url>/v1/chat/completions."},
+    "llm_remote_model": {
+        "group": "assistant", "type": "str", "default": "",
+        "label": "Remote model name",
+        "help": "Model id to request from the remote server (e.g. qwen2.5-7b-instruct). "
+                "Leave blank for servers that ignore it."},
+    "llm_remote_api_key": {
+        "group": "assistant", "type": "str", "default": "",
+        "label": "Remote API key (optional)",
+        "help": "Bearer token if the remote server requires auth. Stored in the database."},
 }
 
 _TTL = 5.0

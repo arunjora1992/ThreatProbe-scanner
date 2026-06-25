@@ -174,11 +174,12 @@ _DISPATCH = {
 
 
 def _chat(messages):
+    url, model, key = assistant.llm_config()
     return assistant._http_json(
-        f"{settings.llm_api_url}/v1/chat/completions",
-        {"model": settings.llm_model, "messages": messages, "tools": TOOLS,
+        f"{url}/v1/chat/completions",
+        {"model": model, "messages": messages, "tools": TOOLS,
          "temperature": 0.2, "max_tokens": 800, "stream": False},
-        timeout=settings.llm_timeout_seconds,
+        timeout=settings.llm_timeout_seconds, headers=assistant.llm_headers(key),
     )
 
 

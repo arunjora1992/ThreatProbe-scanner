@@ -681,6 +681,14 @@ restarts (`docker compose up -d llm`). Bump the `llm` `mem_limit` for bigger mod
 (≈3 GB for 1.5B, ≈5 GB for 3B, ≈8 GB for 7B). On air-gapped hosts, drop the `.gguf` into
 `data/models/` manually.
 
+**Local or remote model.** Under **Settings → AI Assistant → AI model source** choose
+**local** (the bundled offline model in this deployment) or **remote** — point it at an
+**OpenAI-compatible server on another machine** (e.g. a **GPU box** running llama.cpp or
+Ollama) by URL, with an optional model name and API key. The assistant/agent call
+`<url>/v1/chat/completions` at runtime, so you can keep the lightweight bundled model here
+and switch to the GPU box for heavier reasoning whenever it's available — no redeploy. If
+the remote is unreachable, answers fall back to the deterministic DB summaries.
+
 **Air-gapped install.** On a connected host the model file downloads into `data/models/`
 and the `ghcr.io/ggml-org/llama.cpp:server` image is pulled; copy `data/models/` across and
 `docker save`/`load` the image to seed an offline site. (`data/models/` is git-ignored.)
@@ -940,7 +948,8 @@ in the section above; commit hashes are on the `main` branch.
 
 | Date | Feature | Commit |
 |------|---------|--------|
-| 2026-06-25 | **AI: agentic mode (ReAct tool-calling)** — opt-in multi-step loop over read-only DB-grounded tools (best on a 7B model); plus a deterministic package-CVE lookup. | `(latest)` |
+| 2026-06-25 | **AI: local or remote model source** — point the assistant at an OpenAI-compatible server on a GPU box (URL/model/key) or use the bundled offline model, switchable in Settings. | `(latest)` |
+| 2026-06-25 | **AI: agentic mode (ReAct tool-calling)** — opt-in multi-step loop over read-only DB-grounded tools (best on a 7B model); plus a deterministic package-CVE lookup. | `b679e35` |
 | 2026-06-25 | **AI: patch plan, scan diff, and chat actions** — "what should I fix first", "what changed since the last scan", and "rescan/stop/schedule" straight from chat. | `69aec2a` |
 | 2026-06-24 | **GUI AI-model manager + zero-edit model swap** — list/download/select/delete GGUFs; the engine auto-loads the selected (or largest) model. | `5910a9d` |
 | 2026-06-24 | **In-chat scan-launcher wizard** (target → type → credentials → confirm → auto-summary) + per-scan **result counts**. | `816ded9` |

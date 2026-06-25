@@ -2046,7 +2046,9 @@
         ? `<div class="muted small" style="margin-top:8px"><span class="live-dot"></span>downloading: ${d.downloading.map(esc).join(", ")}…</div>` : "";
       const restart = d.restart_required
         ? `<div class="small" style="margin-top:8px;color:var(--med)">⚠ Selected model differs from the loaded one — restart the engine to apply: <code>docker compose up -d llm</code> (or <code>docker restart pentest_llm</code>).</div>` : "";
-      box.innerHTML = rows + dl + restart;
+      const remoteBanner = d.mode === "remote"
+        ? `<div class="small" style="margin-bottom:10px;padding:8px 10px;border-radius:8px;background:var(--grad-soft)">🌐 <b>Using a remote model server</b>${d.remote_url ? ` — <code>${esc(d.remote_url)}</code>` : ""}. The local models below are <b>inactive</b> while source = remote (set in “AI model source” above).</div>` : "";
+      box.innerHTML = remoteBanner + rows + dl + restart;
       const sel = document.getElementById("model-catalog");
       if (sel) sel.innerHTML = d.catalog.map((c) =>
         `<option value="${esc(c.key)}" ${c.present ? "disabled" : ""}>${esc(c.label)} · RAM ${esc(c.ram)}${c.present ? " — present" : ""}</option>`).join("");

@@ -66,10 +66,13 @@ def active_selection() -> str:
 
 
 def loaded_model() -> str:
-    """The model the llm server actually has loaded right now (basename), or ''."""
+    """The model the ACTIVE backend (local or remote) has loaded right now (id), or ''."""
     import json
+    from . import assistant
+    url, _model, key = assistant.llm_config()
     try:
-        with urllib.request.urlopen(f"{settings.llm_api_url}/v1/models", timeout=5) as r:
+        req = urllib.request.Request(f"{url}/v1/models", headers=assistant.llm_headers(key))
+        with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode("utf-8", errors="replace"))
         mid = (data.get("data") or [{}])[0].get("id", "")
         return os.path.basename(mid) if mid else ""
@@ -78,6 +81,9 @@ def loaded_model() -> str:
 
 
 def list_models() -> dict:
+    from . import app_settings
+    mode = app_settings.get_str("llm_mode")
+    remote_url = app_settings.get_str("llm_remote_url")
     d = _dir()
     files = sorted(f for f in os.listdir(d) if f.endswith(".gguf"))
     selected = active_selection()
@@ -95,9 +101,12 @@ def list_models() -> dict:
             "selected": eff_selected, "loaded": bool(loaded) and loaded == f,
         })
     downloading = sorted(k for k, v in _downloading.items() if v)
-    restart_required = bool(loaded) and any(m["selected"] and not m["loaded"] for m in models)
-    return {"models": models, "selected": selected, "loaded": loaded,
-            "downloading": downloading, "restart_required": restart_required,
+    # Restart only matters for the local engine; in remote mode the bundled files are unused.
+    restart_required = (mode != "remote") and bool(loaded) and any(
+        m["selected"] and not m["loaded"] for m in models)
+    return {"models": models, "selected": selected, "loaded": loaded, "mode": mode,
+            "remote_url": remote_url, "downloading": downloading,
+            "restart_required": restart_required,
             "catalog": [{"key": c["key"], "label": c["label"], "file": c["file"],
                          "ram": c["ram"], "present": c["file"] in files} for c in CATALOG]}
 

@@ -120,28 +120,51 @@ VULN_CLASS_DOCS = {
 }
 
 
-def _http_json(url: str, payload: dict, timeout: int):
+def _http_json(url: str, payload: dict, timeout: int, headers: dict = None):
     data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+    hdrs = {"Content-Type": "application/json"}
+    hdrs.update(headers or {})
+    req = urllib.request.Request(url, data=data, headers=hdrs)
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read().decode("utf-8", errors="replace"))
 
 
+def llm_config():
+    """(base_url, model, api_key) for the active backend — bundled-local or a remote
+    OpenAI-compatible server, per the GUI 'AI model source' setting."""
+    from . import app_settings
+    if app_settings.get_str("llm_mode") == "remote":
+        url = app_settings.get_str("llm_remote_url").strip().rstrip("/")
+        if url:
+            return (url, (app_settings.get_str("llm_remote_model").strip() or settings.llm_model),
+                    app_settings.get_str("llm_remote_api_key").strip())
+    return settings.llm_api_url.rstrip("/"), settings.llm_model, ""
+
+
+def llm_headers(api_key: str = "") -> dict:
+    return {"Authorization": f"Bearer {api_key}"} if api_key else {}
+
+
 def llm_available() -> bool:
-    try:
-        req = urllib.request.Request(f"{settings.llm_api_url}/health")
-        with urllib.request.urlopen(req, timeout=5) as r:
-            return r.status == 200
-    except Exception:
-        return False
+    url, _model, key = llm_config()
+    hdrs = llm_headers(key)
+    for path in ("/v1/models", "/health"):  # OpenAI-style first, then llama.cpp /health
+        try:
+            req = urllib.request.Request(f"{url}{path}", headers=hdrs)
+            with urllib.request.urlopen(req, timeout=5) as r:
+                if r.status == 200:
+                    return True
+        except Exception:
+            continue
+    return False
 
 
 def _chat_llm(messages: list) -> str:
+    url, model, key = llm_config()
     resp = _http_json(
-        f"{settings.llm_api_url}/v1/chat/completions",
-        {"model": settings.llm_model, "messages": messages,
-         "temperature": 0.2, "max_tokens": 600, "stream": False},
-        timeout=settings.llm_timeout_seconds,
+        f"{url}/v1/chat/completions",
+        {"model": model, "messages": messages, "temperature": 0.2, "max_tokens": 600, "stream": False},
+        timeout=settings.llm_timeout_seconds, headers=llm_headers(key),
     )
     return (resp.get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
 
