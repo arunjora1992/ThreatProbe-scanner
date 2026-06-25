@@ -119,6 +119,12 @@ def _connect(host, port, username, password, key_text, key_passphrase) -> parami
         raise RuntimeError("SSH authentication failed (check username/password/key).")
     except (paramiko.SSHException, OSError) as exc:
         raise RuntimeError(f"SSH connection failed: {exc}")
+    # Keepalive: on long-running commands (e.g. a multi-minute OpenSCAP eval) a silently
+    # dropped connection would otherwise block reads until the full timeout. Keepalive
+    # probes detect the dead peer and fail the read promptly so the scan doesn't hang.
+    tr = client.get_transport()
+    if tr:
+        tr.set_keepalive(30)
     return client
 
 
