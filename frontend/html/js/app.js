@@ -871,9 +871,9 @@
         .map((k, i) => ({ label: k, value: stMap[k], color: stp[i % stp.length] }));
       const stTotal = stSegs.reduce((a, x) => a + x.value, 0);
 
-      // 14-day scan activity (area chart).
-      const trend = s.scans_trend || [];
-      const trendTotal = trend.reduce((a, x) => a + (x.count || 0), 0);
+      // Top vulnerable hosts + top affected packages (bar charts).
+      const topHosts = s.top_hosts || [];
+      const topPkgs = s.top_packages || [];
 
       // Top priorities (KEV / high-risk findings).
       const topRows = (s.top_risk || []).map((f) => `
@@ -906,9 +906,12 @@
                     : `<p class="muted small">No scans yet.</p>`)}
         </div>
         <div class="chart-row">
-          ${chartCard(`Scan activity · last 14 days (${trendTotal} scan${trendTotal === 1 ? "" : "s"})`,
-            trendTotal ? svgArea(trend.map((t) => ({ label: t.date, value: t.count })), "var(--primary)")
-                       : `<p class="muted small">No scans in the last 14 days.</p>`)}
+          ${chartCard("Top vulnerable hosts (critical / high)",
+            topHosts.length ? svgBars(topHosts.map((h) => ({ label: h.label, value: h.value, color: "#ef4444" })))
+                            : `<p class="muted small">No critical/high findings yet.</p>`)}
+          ${chartCard("Top affected packages / services",
+            topPkgs.length ? svgBars(topPkgs.map((p) => ({ label: p.label, value: p.value, color: "#6366f1" })))
+                           : `<p class="muted small">No findings yet — run a scan to populate.</p>`)}
         </div>
         <h3 class="section-title">🎯 Top priorities (exploited / high-risk)</h3>
         <div class="table-wrap"><table class="fixed">

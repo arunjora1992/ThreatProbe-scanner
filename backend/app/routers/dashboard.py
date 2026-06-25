@@ -66,6 +66,25 @@ def stats(db: Session = Depends(get_db), _: User = Depends(get_current_user)):
                       .filter(Finding.severity.in_(["CRITICAL", "HIGH"]))
                       .filter(Finding.status == "open").count())
 
+    # Top vulnerable hosts (by CRITICAL/HIGH finding count) and top affected packages/
+    # services (by total finding count) — for the dashboard bar charts.
+    host_rows = (db.query(Host.address, func.count(Finding.id))
+                 .select_from(Finding)
+                 .join(Service, Service.id == Finding.service_id)
+                 .join(Host, Host.id == Service.host_id)
+                 .filter(Finding.severity.in_(["CRITICAL", "HIGH"]))
+                 .group_by(Host.address)
+                 .order_by(func.count(Finding.id).desc()).limit(8).all())
+    top_hosts = [{"label": a, "value": int(n)} for a, n in host_rows if a]
+
+    pkg_label = func.coalesce(func.nullif(Service.product, ""), func.nullif(Service.service_name, ""))
+    pkg_rows = (db.query(pkg_label, func.count(Finding.id))
+                .select_from(Finding)
+                .join(Service, Service.id == Finding.service_id)
+                .group_by(pkg_label)
+                .order_by(func.count(Finding.id).desc()).limit(8).all())
+    top_packages = [{"label": p, "value": int(n)} for p, n in pkg_rows if p]
+
     # Top priorities: rank findings by exploited (KEV) -> EPSS -> CVSS.
     top_rows = (db.query(Finding, CVE, Service)
                 .join(CVE, CVE.cve_id == Finding.cve_id)
@@ -94,6 +113,8 @@ def stats(db: Session = Depends(get_db), _: User = Depends(get_current_user)):
         "scan_status": scan_status,
         "scan_types": scan_types,
         "scans_trend": scans_trend,
+        "top_hosts": top_hosts,
+        "top_packages": top_packages,
         "severity_breakdown": combined,
         "top_risk": top_risk,
         "recent_scans": recent_out,

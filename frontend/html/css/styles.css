@@ -161,7 +161,7 @@ tbody tr:hover { background: var(--panel-2); }
 .legend i { width: 11px; height: 11px; border-radius: 2px; display: inline-block; }
 .bars { display: flex; flex-direction: column; gap: 6px; }
 .bar-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
-.bar-lbl { width: 74px; text-align: right; color: var(--muted); flex: none; }
+.bar-lbl { width: 104px; text-align: right; color: var(--muted); flex: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .bar-track { flex: 1; background: var(--bg-2); border-radius: 4px; height: 14px; overflow: hidden; }
 .bar-fill { display: block; height: 100%; border-radius: 4px; }
 .bar-val { width: 28px; flex: none; }
